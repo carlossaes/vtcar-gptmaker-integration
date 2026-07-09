@@ -8,14 +8,15 @@ const router = express.Router();
 // POST /webhooks/gptmaker?key=WEBHOOK_SECRET
 // Configurado no GPT Maker como o webhook "onFirstInteraction" do agente.
 router.post('/gptmaker', async (req, res) => {
+  // Sempre guarda o ultimo payload bruto recebido, ANTES de checar a chave
+  // secreta -- assim da pra diagnosticar tanto "chave errada" quanto
+  // "o GPT Maker nunca chamou o webhook" olhando /api/debug/last-webhook.
+  store.setLastWebhookDebug({ query: req.query, body: req.body });
+
   const expectedSecret = process.env.WEBHOOK_SECRET;
   if (expectedSecret && req.query.key !== expectedSecret) {
     return res.status(403).json({ error: 'Chave de webhook invalida' });
   }
-
-  // Sempre guarda o ultimo payload bruto recebido, mesmo que a gente nao
-  // consiga normalizar -- isso e o que permite ajustar o mapeamento depois.
-  store.setLastWebhookDebug(req.body);
 
   const normalized = normalizeWebhookPayload(req.body);
   if (!normalized) {
