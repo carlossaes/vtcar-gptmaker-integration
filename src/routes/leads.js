@@ -25,7 +25,7 @@ router.get('/', (req, res) => {
 // Usado pelo botao "Novo Lead" do CRM, pra cadastro manual (fora do fluxo
 // automatico do GPT Maker).
 router.post('/', (req, res) => {
-  const { name, phone, email, channel, vehicleInterest, notes } = req.body || {};
+  const { name, phone, email, channel, vehicleInterest, notes, gptmakerChatId } = req.body || {};
   if (!name) {
     return res.status(400).json({ error: 'Campo "name" e obrigatorio' });
   }
@@ -37,6 +37,10 @@ router.post('/', (req, res) => {
     channel: channel || 'Outro',
     vehicleInterest: vehicleInterest || null,
     notes: notes || null,
+    // Permite vincular esse lead a uma conversa ja existente no GPT Maker
+    // (contextId), pra quando o contato ja existia antes de virar lead no
+    // CRM e por isso o onFirstInteraction nao disparou de novo pra ele.
+    gptmakerChatId: gptmakerChatId || null,
     source: 'manual',
   });
   res.status(201).json(lead);
