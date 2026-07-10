@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const store = require('../store');
+const { generateCoachAnalysis } = require('../openaiClient');
 
 const router = express.Router();
 
@@ -55,6 +56,59 @@ router.patch('/:id', (req, res) => {
     res.json(updated);
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// GET /api/leads/:id/messages
+// Historico de mensagens sincronizado via webhook onNewMessage.
+router.get('/:id/messages', (req, res) => {
+  const lead = store.getLeadById(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Lead nao encontrado' });
+  const messages = store.getMessages(lead.gptmakerChatId);
+  res.json(messages);
+});
+
+// GET /api/leads/:id/coach
+// Retorna a ultima analise do Coach de Vendas ja calculada (ou null se
+// ainda nao foi gerada nenhuma vez). Nao chama a OpenAI -- so le o cache.
+router.get('/:id/coach', (req, res) => {
+  const lead = store.getLeadById(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Lead nao encontrado' });
+  res.json(store.getCoachAnalysis(lead.id));
+});
+
+// POST /api/leads/:id/coach
+// Forca o calculo de uma analise nova com base nas mensagens atuais.
+router.post('/:id/coach', async (req, res) => {
+  const lead = store.getLeadById(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Lead nao encontrado' });
+
+  const messages = store.getMessages(lead.gptmakerChatId);
+  if (!messages.length) {
+    return res.status(400).json({ error: 'Ainda nao ha mensagens sincronizadas pra esse lead' });
+  }
+
+  const transcript = messages
+    .map((m) => `${m.direction === 'cliente' ? 'Cliente' : 'Equipe'}: ${m.text}`)
+    .join('\n');
+
+  try {
+    const analysis = await generateCoachAnalysis(transcript, {
+      name: lead.name,
+      channel: lead.channel,
+      vehicleInterest: lead.vehicleInterest,
+      stage: lead.stage,
+    });
+    const record = {
+      ...analysis,
+      generatedAt: new Date().toISOString(),
+      messageCount: messages.length,
+    };
+    store.setCoachAnalysis(lead.id, record);
+    res.json(record);
+  } catch (err) {
+    console.error('[coach] Falha ao gerar analise:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

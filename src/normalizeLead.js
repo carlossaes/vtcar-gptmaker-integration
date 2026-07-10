@@ -1,10 +1,10 @@
-// ATENCAO: o formato exato do payload que o GPT Maker envia no webhook
-// "onFirstInteraction" nao e documentado publicamente. Esta funcao tenta,
-// de forma defensiva, achar os campos certos em varios formatos possiveis.
-//
-// Depois que o primeiro evento real chegar, confira em:
-//   GET /api/debug/last-webhook
-// o corpo exato recebido, e ajuste os caminhos abaixo se necessario.
+// Formato real confirmado em producao (via /api/debug/last-webhook) para o
+// evento "onFirstInteraction":
+//   { agentId, interactionId, protocol, name, recipient, channel, contextId, channelId }
+// Ex: {"name":"UsinaTI - Comercial","recipient":"554396471800","channel":"WHATSAPP",
+//      "contextId":"...-554396471800","channelId":"..."}
+// Mantemos a extracao defensiva (varios caminhos possiveis) caso o GPT Maker
+// mude o formato ou envie de outros canais/eventos no futuro.
 
 function firstDefined(...values) {
   return values.find((v) => v !== undefined && v !== null && v !== '');
@@ -21,6 +21,15 @@ function extractChannelId(payload) {
     payload.channel && payload.channel.id,
     payload.chat && payload.chat.channelId,
     payload.chatChannelId,
+  ) || null;
+}
+
+// O GPT Maker ja manda o tipo do canal pronto como string (ex: "WHATSAPP"),
+// entao nao precisamos de uma chamada extra a API pra descobrir isso.
+function extractChannelType(payload) {
+  return firstDefined(
+    typeof payload.channel === 'string' ? payload.channel : null,
+    payload.chat && typeof payload.chat.channel === 'string' ? payload.chat.channel : null,
   ) || null;
 }
 
@@ -47,6 +56,7 @@ function normalizeWebhookPayload(payload) {
   const gptmakerContactId = firstDefined(contact.id, null);
   const gptmakerChatId = extractChatId(payload);
   const channelIdRaw = extractChannelId(payload);
+  const channelTypeRaw = extractChannelType(payload);
 
   // Precisa de pelo menos um identificador util pra nao criar lead "vazio".
   const sourceId = gptmakerContactId || phone || gptmakerChatId;
@@ -62,6 +72,7 @@ function normalizeWebhookPayload(payload) {
     gptmakerContactId,
     gptmakerChatId,
     channelIdRaw,
+    channelTypeRaw,
     vehicleInterest: null, // sem campo pronto na API; preencher manualmente ou via custom field
   };
 }

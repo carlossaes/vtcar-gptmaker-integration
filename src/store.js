@@ -14,6 +14,8 @@ const crypto = require('crypto');
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const LEADS_FILE = path.join(DATA_DIR, 'leads.json');
 const DEBUG_FILE = path.join(DATA_DIR, 'last-webhook.json');
+const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
+const COACH_FILE = path.join(DATA_DIR, 'coach.json');
 
 function ensureFile(filePath, defaultContent) {
   if (!fs.existsSync(DATA_DIR)) {
@@ -43,6 +45,8 @@ function writeJsonAtomic(filePath, data) {
 
 ensureFile(LEADS_FILE, []);
 ensureFile(DEBUG_FILE, null);
+ensureFile(MESSAGES_FILE, {});
+ensureFile(COACH_FILE, {});
 
 const ALLOWED_STAGES = ['novo', 'qualificado', 'proposta', 'negociacao', 'fechado', 'perdido'];
 
@@ -108,6 +112,36 @@ function updateLeadStage(id, stage) {
   return leads[index];
 }
 
+// Mensagens sincronizadas de cada atendimento, guardadas por gptmakerChatId
+// (o mesmo "contextId" que o GPT Maker manda nos webhooks).
+function getMessages(chatId) {
+  if (!chatId) return [];
+  const all = readJson(MESSAGES_FILE, {});
+  return all[chatId] || [];
+}
+
+function appendMessage(chatId, message) {
+  if (!chatId) return [];
+  const all = readJson(MESSAGES_FILE, {});
+  if (!all[chatId]) all[chatId] = [];
+  all[chatId].push(message);
+  writeJsonAtomic(MESSAGES_FILE, all);
+  return all[chatId];
+}
+
+// Cache da ultima analise do Coach de Vendas (IA) por lead, pra nao precisar
+// chamar a OpenAI de novo toda vez que o vendedor so quer reabrir o card.
+function getCoachAnalysis(leadId) {
+  const all = readJson(COACH_FILE, {});
+  return all[leadId] || null;
+}
+
+function setCoachAnalysis(leadId, analysis) {
+  const all = readJson(COACH_FILE, {});
+  all[leadId] = analysis;
+  writeJsonAtomic(COACH_FILE, all);
+}
+
 function setLastWebhookDebug(payload) {
   writeJsonAtomic(DEBUG_FILE, {
     receivedAt: new Date().toISOString(),
@@ -127,4 +161,8 @@ module.exports = {
   updateLeadStage,
   setLastWebhookDebug,
   getLastWebhookDebug,
+  getMessages,
+  appendMessage,
+  getCoachAnalysis,
+  setCoachAnalysis,
 };
