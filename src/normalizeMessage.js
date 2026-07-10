@@ -40,8 +40,19 @@ function extractDirection(payload) {
   return 'cliente';
 }
 
+// Confirmado em producao: o GPT Maker manda um evento de onNewMessage pra
+// CADA mensagem, inclusive mensagens internas de controle da IA (role
+// "tool"), que nao sao nem o cliente nem o vendedor falando -- sao
+// instrucoes internas do proprio agente (ex: "diga tchau sem mencionar que
+// marcou como resolvido"). Essas tem que ser ignoradas, senao poluem o
+// historico da conversa e a analise do Coach de Vendas.
+function isInternalControlMessage(payload) {
+  return payload.role === 'tool';
+}
+
 function normalizeMessagePayload(payload) {
   if (!payload || typeof payload !== 'object') return null;
+  if (isInternalControlMessage(payload)) return null;
 
   const chatId = extractChatId(payload);
   const text = extractText(payload);
@@ -51,7 +62,7 @@ function normalizeMessagePayload(payload) {
     chatId,
     text,
     direction: extractDirection(payload),
-    at: new Date().toISOString(),
+    at: payload.date || new Date().toISOString(),
   };
 }
 
