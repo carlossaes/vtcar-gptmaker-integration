@@ -1,0 +1,18 @@
+# Dependencias — reinstaladas por "npm install", nunca vao pro repositorio.
+node_modules/
+
+# Segredos: token do GPT Maker, chave da OpenAI, senha do webhook.
+# O .env.example (sem valores reais) fica versionado; o .env de verdade, nunca.
+.env
+.env.*
+!.env.example
+
+# Base de dados local do CRM: leads, mensagens e analises do Coach.
+# Sao dados de cliente — nao podem parar num repositorio publico.
+data/
+*.json.tmp
+
+# Sobras de execucao
+npm-debug.log*
+*.log
+.DS_Store
