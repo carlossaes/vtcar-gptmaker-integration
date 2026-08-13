@@ -6,6 +6,7 @@ const cors = require('cors');
 const webhooksRouter = require('./src/routes/webhooks');
 const leadsRouter = require('./src/routes/leads');
 const debugRouter = require('./src/routes/debug');
+const gptmakerRouter = require('./src/routes/gptmaker');
 
 const app = express();
 
@@ -19,6 +20,7 @@ app.get('/health', (req, res) => {
 app.use('/webhooks', webhooksRouter);
 app.use('/api/leads', leadsRouter);
 app.use('/api/debug', debugRouter);
+app.use('/api/gptmaker', gptmakerRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Rota nao encontrada' });
