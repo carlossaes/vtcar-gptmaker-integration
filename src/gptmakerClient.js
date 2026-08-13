@@ -63,8 +63,56 @@ async function resolveChannelLabel(workspaceId, channelId) {
   }
 }
 
+// Percorre TODAS as paginas de chats do workspace e devolve a lista inteira.
+// A API entrega no maximo 100 por vez; aqui a paginacao fica escondida de
+// quem chama. O limite de 200 paginas e so uma trava de seguranca pra nunca
+// entrar em laco infinito se a API mudar o formato da resposta.
+async function listAllChats({ workspaceId, agentId, pageSize = 100, maxPages = 200 }) {
+  if (!workspaceId) {
+    throw new Error('GPTMAKER_WORKSPACE_ID nao configurado nas variaveis de ambiente');
+  }
+
+  const todos = [];
+  const vistos = new Set();
+
+  for (let page = 1; page <= maxPages; page++) {
+    const url = new URL(`${API_BASE}/v2/workspace/${workspaceId}/chats`);
+    url.searchParams.set('page', String(page));
+    url.searchParams.set('pageSize', String(pageSize));
+    if (agentId) url.searchParams.set('agentId', agentId);
+
+    const res = await fetch(url, { headers: authHeaders() });
+    if (!res.ok) {
+      const corpo = await res.text().catch(() => '');
+      throw new Error(`Erro ao listar chats do GPT Maker: ${res.status} ${corpo.slice(0, 200)}`);
+    }
+
+    const json = await res.json();
+    // A API ora devolve array puro, ora um objeto com "data" — aceita os dois.
+    const lote = Array.isArray(json) ? json : json.data || [];
+    if (!lote.length) break;
+
+    let novos = 0;
+    for (const chat of lote) {
+      const chave = chat.id || `${chat.whatsappPhone}-${chat.createdAt}`;
+      if (vistos.has(chave)) continue;
+      vistos.add(chave);
+      todos.push(chat);
+      novos++;
+    }
+
+    // Pagina repetida ou menor que o tamanho pedido significa que acabou.
+    // O teste de "novos" protege contra API que ignora o parametro page e
+    // devolve sempre a mesma pagina — sem isso, o laco iria ate o maxPages.
+    if (novos === 0 || lote.length < pageSize) break;
+  }
+
+  return todos;
+}
+
 module.exports = {
   mapChannelTypeToLabel,
   listChannels,
   resolveChannelLabel,
+  listAllChats,
 };
