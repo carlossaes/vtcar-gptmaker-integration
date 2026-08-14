@@ -2,6 +2,7 @@ const express = require('express');
 const store = require('../store');
 const { listAllChats } = require('../gptmakerClient');
 const { isLidPhone } = require('../normalizeLead');
+const { mapChannelTypeToLabel } = require('../gptmakerClient');
 
 const router = express.Router();
 
@@ -151,6 +152,75 @@ router.post('/corrigir-telefones', async (req, res) => {
     res.json({ dryRun, encontrados: quebrados.length, corrigidos, semSolucao });
   } catch (err) {
     console.error('[gptmaker] Falha ao corrigir telefones:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// POST /api/gptmaker/importar-antigos
+// Traz pro CRM os atendimentos que existem no GPT Maker mas nunca viraram
+// lead — os anteriores ao dia em que o webhook foi ligado.
+// Use ?dryRun=1 pra ver o que entraria, sem gravar nada.
+router.post('/importar-antigos', async (req, res) => {
+  const dryRun = req.query.dryRun === '1' || req.query.dryRun === 'true';
+  try {
+    const brutos = await listAllChats({
+      workspaceId: process.env.GPTMAKER_WORKSPACE_ID,
+      agentId: process.env.GPTMAKER_AGENT_ID,
+    });
+
+    const leads = store.getAllLeads();
+    const fonesCrm = new Set(leads.map((l) => soDigitos(l.phone)).filter(Boolean));
+    const chatIdsCrm = new Set(leads.map((l) => l.gptmakerChatId).filter(Boolean));
+
+    const importados = [];
+    const ignorados = [];
+
+    for (const chat of brutos) {
+      const c = normalizarChat(chat);
+      const jaExiste = (c.phone && fonesCrm.has(c.phone)) || (c.id && chatIdsCrm.has(c.id));
+      if (jaExiste) continue;
+
+      // Sem telefone nao da pra ligar nem deduplicar direito — melhor deixar
+      // de fora e relatar do que encher o CRM de registro inutil.
+      if (!c.phone) {
+        ignorados.push({ id: c.id, name: c.name, motivo: 'sem telefone' });
+        continue;
+      }
+
+      // Marca o telefone como visto ANTES do dryRun decidir gravar. Se dois
+      // chats do GPT Maker tiverem o mesmo numero, o ensaio contaria dois e a
+      // execucao real importaria um — e o numero prometido nao bateria.
+      fonesCrm.add(c.phone);
+
+      if (!dryRun) {
+        store.upsertLeadBySourceId(c.phone, {
+          name: c.name || 'Sem nome',
+          phone: c.phone,
+          email: null,
+          channel: mapChannelTypeToLabel(c.channelType),
+          gptmakerChatId: c.id,
+          vehicleInterest: null,
+          // Preserva a data real da conversa. Sem isso, os 162 entrariam
+          // como se tivessem chegado hoje e o grafico do dashboard mentiria.
+          createdAt: c.createdAt || new Date().toISOString(),
+          source: 'gptmaker-historico',
+        });
+      }
+
+      importados.push({ nome: c.name, telefone: c.phone, quando: c.createdAt });
+    }
+
+    const datas = importados.map((i) => i.quando).filter(Boolean).sort();
+    res.json({
+      dryRun,
+      importados: importados.length,
+      ignorados,
+      periodoImportado: { do: datas[0] || null, ate: datas[datas.length - 1] || null },
+      totalNoCrmDepois: dryRun ? store.getAllLeads().length + importados.length : store.getAllLeads().length,
+      amostra: importados.slice(0, 5),
+    });
+  } catch (err) {
+    console.error('[gptmaker] Falha ao importar antigos:', err.message);
     res.status(502).json({ error: err.message });
   }
 });
