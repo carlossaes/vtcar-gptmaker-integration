@@ -95,7 +95,7 @@ function acharPorId(id) {
 
 // Cria o usuario e devolve a senha gerada UMA unica vez, pra quem chamou
 // mandar por e-mail. Ela nao fica guardada em lugar nenhum.
-function criar({ nome, email, papel = 'vendedor', senha = null }) {
+function criar({ nome, email, papel = 'vendedor', senha = null, jaDefiniuSenha = false }) {
   const emailLimpo = normalizarEmail(email);
   if (!nome || !String(nome).trim()) throw new Error('Nome e obrigatorio');
   if (!emailLimpo || !emailLimpo.includes('@')) throw new Error('E-mail invalido');
@@ -110,7 +110,9 @@ function criar({ nome, email, papel = 'vendedor', senha = null }) {
     papel,
     ativo: true,
     senhaHash: bcrypt.hashSync(senhaGerada, CUSTO_BCRYPT),
-    precisaTrocarSenha: true,
+    // Quem entrou por convite ja escolheu a propria senha — nao faz sentido
+    // pedir pra trocar de novo no primeiro acesso.
+    precisaTrocarSenha: !jaDefiniuSenha,
     criadoEm: new Date().toISOString(),
     ultimoAcesso: null,
   };
@@ -206,8 +208,25 @@ function usarTokenReset(token, novaSenha) {
   return { ok: true, usuario: publico(lista[i]) };
 }
 
+// Setup abandonado: existe UM unico gerente que nunca conseguiu entrar.
+// Acontece quando a pessoa cria a conta e perde a senha provisoria. Enquanto
+// ninguem tiver logado nenhuma vez, a tela de primeiro acesso volta a
+// funcionar pra refazer o cadastro. Basta um login pra isso fechar de vez.
+function setupAbandonado() {
+  const lista = ler();
+  if (lista.length !== 1) return false;
+  const u = lista[0];
+  return u.papel === 'gerente' && !u.ultimoAcesso && u.precisaTrocarSenha === true;
+}
+
+function limparTudo() {
+  gravar([]);
+}
+
 module.exports = {
   PAPEIS,
+  setupAbandonado,
+  limparTudo,
   segredoJwt,
   gerarSenha,
   publico,
