@@ -110,9 +110,37 @@ async function listAllChats({ workspaceId, agentId, pageSize = 100, maxPages = 2
   return todos;
 }
 
+// Procura UM chat pelo id, varrendo as paginas ate achar. Usado so quando o
+// webhook chega com identificador "@lid" em vez de telefone — situacao rara,
+// entao o custo de paginar compensa nao manter cache de tudo.
+async function findChatById({ workspaceId, chatId, agentId, maxPages = 30 }) {
+  if (!chatId) return null;
+  const pageSize = 100;
+
+  for (let page = 1; page <= maxPages; page++) {
+    const url = new URL(`${API_BASE}/v2/workspace/${workspaceId}/chats`);
+    url.searchParams.set('page', String(page));
+    url.searchParams.set('pageSize', String(pageSize));
+    if (agentId) url.searchParams.set('agentId', agentId);
+
+    const res = await fetch(url, { headers: authHeaders() });
+    if (!res.ok) throw new Error(`Erro ao buscar chat no GPT Maker: ${res.status}`);
+
+    const json = await res.json();
+    const lote = Array.isArray(json) ? json : json.data || [];
+    if (!lote.length) return null;
+
+    const achado = lote.find((c) => c.id === chatId);
+    if (achado) return achado;
+    if (lote.length < pageSize) return null;
+  }
+  return null;
+}
+
 module.exports = {
   mapChannelTypeToLabel,
   listChannels,
   resolveChannelLabel,
   listAllChats,
+  findChatById,
 };

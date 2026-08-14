@@ -77,4 +77,12 @@ function normalizeWebhookPayload(payload) {
   };
 }
 
-module.exports = { normalizeWebhookPayload };
+// O WhatsApp passou a identificar parte dos contatos por LID em vez do
+// numero: chega "65464545861703@lid" no lugar do telefone. Quando isso
+// acontece o lead fica sem numero pra ligar, entao precisamos buscar o
+// telefone real na API do GPT Maker (campo whatsappPhone do chat).
+function isLidPhone(phone) {
+  return typeof phone === 'string' && phone.includes('@');
+}
+
+module.exports = { normalizeWebhookPayload, isLidPhone };
