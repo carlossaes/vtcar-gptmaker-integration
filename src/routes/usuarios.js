@@ -1,6 +1,7 @@
 const express = require('express');
 const usuarios = require('../auth/usuarios');
 const mailer = require('../mailer');
+const convites = require('../auth/convites');
 const { exigirAuth, exigirGerente } = require('../auth/middleware');
 
 const router = express.Router();
@@ -103,6 +104,39 @@ router.post('/:id/reenviar-senha', async (req, res) => {
     emailEnviado: envio.enviado,
     senhaProvisoria: envio.enviado ? undefined : senha,
   });
+});
+
+/* ---------------- convites ---------------- */
+
+// GET /api/usuarios/convites
+router.get('/convites', (req, res) => {
+  res.json(convites.listar());
+});
+
+// POST /api/usuarios/convites  { papel, emailSugerido?, observacao? }
+// Devolve o LINK pronto. O token só existe aqui e dentro do link — nem eu
+// consigo recuperá-lo depois; se a pessoa perder, o gerente gera outro.
+router.post('/convites', (req, res) => {
+  const { papel, emailSugerido, observacao } = req.body || {};
+  try {
+    const { convite, token } = convites.criar({
+      papel: papel || 'vendedor',
+      emailSugerido,
+      observacao,
+      criadoPor: req.usuario.id,
+    });
+    const base = mailer.appUrl();
+    res.status(201).json({ convite, link: `${base}/?convite=${token}` });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// DELETE /api/usuarios/convites/:id — cancela um convite ainda não usado
+router.delete('/convites/:id', (req, res) => {
+  const removido = convites.revogar(req.params.id);
+  if (!removido) return res.status(404).json({ error: 'Convite não encontrado' });
+  res.status(204).end();
 });
 
 module.exports = router;

@@ -1,6 +1,7 @@
 const express = require('express');
 const usuarios = require('../auth/usuarios');
 const mailer = require('../mailer');
+const convites = require('../auth/convites');
 const { gerarToken, exigirAuth, registrarFalha, limparFalhas, bloqueado } = require('../auth/middleware');
 
 const router = express.Router();
@@ -17,7 +18,7 @@ function validarSenha(senha) {
 // GET /api/auth/precisa-configurar
 // O front usa isso pra saber se mostra a tela de primeiro acesso.
 router.get('/precisa-configurar', (req, res) => {
-  res.json({ precisaConfigurar: usuarios.contar() === 0 });
+  res.json({ precisaConfigurar: usuarios.contar() === 0 || usuarios.setupAbandonado() });
 });
 
 // POST /api/auth/primeiro-acesso  { nome, email }
@@ -25,23 +26,30 @@ router.get('/precisa-configurar', (req, res) => {
 // sem nenhum usuário — depois disso a rota se fecha sozinha e novas contas
 // passam a ser criadas apenas por um gerente logado.
 router.post('/primeiro-acesso', async (req, res) => {
-  if (usuarios.contar() > 0) {
-    return res.status(403).json({ error: 'O CRM já está configurado. Peça acesso a um gerente.' });
+  const vazio = usuarios.contar() === 0;
+  const abandonado = usuarios.setupAbandonado();
+  if (!vazio && !abandonado) {
+    return res.status(403).json({ error: 'O CRM já está configurado. Peça um link de convite a um gerente.' });
+  }
+  // Refazendo um setup que ficou pela metade: apaga a conta que nunca foi
+  // usada pra nao deixar um acesso órfão pendurado.
+  if (abandonado) {
+    usuarios.limparTudo();
+    console.log('[auth] Setup abandonado detectado — conta anterior (nunca usada) removida.');
   }
 
-  const { nome, email } = req.body || {};
+  const { nome, email, senha } = req.body || {};
   try {
-    const { usuario, senha } = usuarios.criar({ nome, email, papel: 'gerente' });
-    const envio = await mailer.enviarBoasVindas({ nome: usuario.nome, email: usuario.email, senha });
-    console.log(`[auth] Primeiro gerente criado: ${usuario.email}${envio.enviado ? '' : ` | senha provisoria: ${senha}`}`);
+    // Agora a pessoa escolhe a própria senha já na criação — ninguém precisa
+    // decorar senha gerada nem depender de e-mail configurado.
+    const erroSenha = validarSenha(senha);
+    if (erroSenha) return res.status(400).json({ error: erroSenha });
 
-    res.status(201).json({
-      usuario,
-      emailEnviado: envio.enviado,
-      // Sistema vazio + conta recém-criada por quem está montando: devolver a
-      // senha aqui é seguro e evita ficar travado sem o e-mail configurado.
-      senhaProvisoria: senha,
-    });
+    const { usuario } = usuarios.criar({ nome, email, papel: 'gerente', senha, jaDefiniuSenha: true });
+    console.log(`[auth] Primeiro gerente criado: ${usuario.email}`);
+
+    const completo = usuarios.acharPorEmail(usuario.email);
+    res.status(201).json({ usuario, token: gerarToken(completo) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -138,6 +146,58 @@ router.post('/redefinir-senha', (req, res) => {
 
   const completo = usuarios.acharPorEmail(r.usuario.email);
   res.json({ ok: true, token: gerarToken(completo), usuario: r.usuario });
+});
+
+// GET /api/auth/convite/:token — o front confere o link antes de mostrar o
+// formulário, pra não deixar a pessoa preencher tudo e só então descobrir
+// que o convite venceu.
+router.get('/convite/:token', (req, res) => {
+  const r = convites.conferir(req.params.token);
+  if (r.valido) {
+    return res.json({ valido: true, papel: r.convite.papel, emailSugerido: r.convite.emailSugerido });
+  }
+  const mensagens = {
+    inexistente: 'Este link de convite não é válido. Peça um novo ao gerente.',
+    usado: 'Este convite já foi usado. Se a conta é sua, entre normalmente; senão peça um novo link.',
+    expirado: 'Este convite expirou. Peça um novo ao gerente.',
+  };
+  res.status(400).json({ valido: false, error: mensagens[r.motivo] });
+});
+
+// POST /api/auth/aceitar-convite  { token, nome, email, senha }
+// A pessoa cria a própria conta a partir do link. Já entra logada.
+router.post('/aceitar-convite', (req, res) => {
+  const { token, nome, email, senha } = req.body || {};
+
+  const r = convites.conferir(token);
+  if (!r.valido) {
+    const mensagens = {
+      inexistente: 'Este link de convite não é válido. Peça um novo ao gerente.',
+      usado: 'Este convite já foi usado.',
+      expirado: 'Este convite expirou. Peça um novo ao gerente.',
+    };
+    return res.status(400).json({ error: mensagens[r.motivo] });
+  }
+
+  const erroSenha = validarSenha(senha);
+  if (erroSenha) return res.status(400).json({ error: erroSenha });
+
+  try {
+    const { usuario } = usuarios.criar({
+      nome,
+      email,
+      papel: r.convite.papel,
+      senha,
+      jaDefiniuSenha: true,
+    });
+    convites.marcarUsado(token, usuario.id);
+    console.log(`[auth] Convite usado: ${usuario.email} entrou como ${usuario.papel}`);
+
+    const completo = usuarios.acharPorEmail(usuario.email);
+    res.status(201).json({ usuario, token: gerarToken(completo) });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 module.exports = router;
