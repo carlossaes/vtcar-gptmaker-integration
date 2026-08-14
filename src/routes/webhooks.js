@@ -1,8 +1,8 @@
 const express = require('express');
 const store = require('../store');
-const { normalizeWebhookPayload } = require('../normalizeLead');
+const { normalizeWebhookPayload, isLidPhone } = require('../normalizeLead');
 const { normalizeMessagePayload } = require('../normalizeMessage');
-const { resolveChannelLabel, mapChannelTypeToLabel } = require('../gptmakerClient');
+const { resolveChannelLabel, mapChannelTypeToLabel, findChatById } = require('../gptmakerClient');
 
 const router = express.Router();
 
@@ -38,9 +38,33 @@ router.post('/gptmaker', async (req, res) => {
     channel = await resolveChannelLabel(workspaceId, normalized.channelIdRaw);
   }
 
+  // Contato identificado por LID nao traz telefone no webhook. Buscamos o
+  // numero real no chat correspondente. Se falhar, o lead entra do mesmo
+  // jeito (com o LID) — melhor um lead com telefone ruim do que lead nenhum.
+  let phone = normalized.phone;
+  if (isLidPhone(phone)) {
+    try {
+      const chat = await findChatById({
+        workspaceId: process.env.GPTMAKER_WORKSPACE_ID,
+        chatId: normalized.gptmakerChatId,
+        agentId: process.env.GPTMAKER_AGENT_ID,
+      });
+      if (chat && chat.whatsappPhone) {
+        phone = String(chat.whatsappPhone);
+        console.log(`[webhooks] Telefone recuperado do LID: ${normalized.phone} -> ${phone}`);
+      } else {
+        console.warn(`[webhooks] Nao achei telefone real para o LID ${normalized.phone}`);
+      }
+    } catch (err) {
+      console.error('[webhooks] Falha ao resolver LID:', err.message);
+    }
+  }
+
+  // sourceId continua sendo o LID de proposito: e a chave de deduplicacao e
+  // mexer nela criaria lead duplicado pra quem ja esta gravado.
   const { lead, created } = store.upsertLeadBySourceId(normalized.sourceId, {
     name: normalized.name,
-    phone: normalized.phone,
+    phone,
     email: normalized.email,
     channel,
     gptmakerContactId: normalized.gptmakerContactId,

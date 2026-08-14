@@ -1,6 +1,7 @@
 const express = require('express');
 const store = require('../store');
 const { listAllChats } = require('../gptmakerClient');
+const { isLidPhone } = require('../normalizeLead');
 
 const router = express.Router();
 
@@ -107,6 +108,49 @@ router.get('/reconciliacao', async (req, res) => {
     });
   } catch (err) {
     console.error('[gptmaker] Falha na reconciliacao:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// POST /api/gptmaker/corrigir-telefones
+// Conserta os leads que ficaram com o LID gravado no lugar do numero,
+// puxando o telefone real do chat correspondente no GPT Maker.
+// Use ?dryRun=1 pra so ver o que seria alterado, sem gravar nada.
+router.post('/corrigir-telefones', async (req, res) => {
+  const dryRun = req.query.dryRun === '1' || req.query.dryRun === 'true';
+  try {
+    const chats = await listAllChats({
+      workspaceId: process.env.GPTMAKER_WORKSPACE_ID,
+      agentId: process.env.GPTMAKER_AGENT_ID,
+    });
+    const porId = new Map(chats.map((c) => [c.id, c]));
+
+    const quebrados = store.getAllLeads().filter((l) => isLidPhone(l.phone));
+    const corrigidos = [];
+    const semSolucao = [];
+
+    for (const lead of quebrados) {
+      const chat = porId.get(lead.gptmakerChatId);
+      const real = chat && chat.whatsappPhone ? String(chat.whatsappPhone) : null;
+
+      // So aceita numero plausivel: 10 a 13 digitos e nada de "@".
+      const digitos = real ? real.replace(/\D/g, '') : '';
+      if (!real || isLidPhone(real) || digitos.length < 10 || digitos.length > 13) {
+        semSolucao.push({ id: lead.id, name: lead.name, phone: lead.phone, encontrado: real });
+        continue;
+      }
+
+      if (!dryRun) {
+        // upsert pelo mesmo sourceId: atualiza o telefone e preserva o
+        // estagio que o vendedor ja tiver definido no funil.
+        store.upsertLeadBySourceId(lead.sourceId, { phone: real });
+      }
+      corrigidos.push({ id: lead.id, name: lead.name, de: lead.phone, para: real });
+    }
+
+    res.json({ dryRun, encontrados: quebrados.length, corrigidos, semSolucao });
+  } catch (err) {
+    console.error('[gptmaker] Falha ao corrigir telefones:', err.message);
     res.status(502).json({ error: err.message });
   }
 });
