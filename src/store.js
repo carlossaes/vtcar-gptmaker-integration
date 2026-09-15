@@ -50,8 +50,22 @@ ensureFile(COACH_FILE, {});
 
 const ALLOWED_STAGES = ['novo', 'qualificado', 'proposta', 'negociacao', 'fechado', 'perdido'];
 
+// `recordType` so existe fisicamente no JSON a partir da Entrega 003. Pra
+// nao perder os 500+ registros ja assumidos antes desse campo existir (e
+// SEM rodar migracao nenhuma no disco), o efetivo e calculado na leitura:
+//
+//   - se o campo existe fisicamente, o valor gravado manda;
+//   - se nao existe, quem decide e ownerId: registro ja possuido vira
+//     "opportunity" (e assim continua aparecendo no Pipeline de quem e
+//     dono), registro sem dono vira "lead".
+//
+// Normalizado aqui, num unico lugar, pra todo mundo que ler
+// getAllLeads()/getLeadById() ja receber o campo preenchido.
 function getAllLeads() {
-  return readJson(LEADS_FILE, []);
+  return readJson(LEADS_FILE, []).map((l) => ({
+    ...l,
+    recordType: l.recordType || (l.ownerId ? 'opportunity' : 'lead'),
+  }));
 }
 
 function getLeadById(id) {
@@ -90,11 +104,16 @@ function upsertLeadBySourceId(sourceId, fields) {
       sourceId,
       stage: 'novo',
       source: 'gptmaker',
+      // "lead" e o padrao -- quem cria manualmente uma oportunidade
+      // (routes/leads.js) sobrescreve os dois campos abaixo explicitamente.
+      recordType: 'lead',
+      origin: 'WhatsApp',
       createdAt: now,
       updatedAt: now,
       // O responsavel comercial nunca vem do atendente (GPT Maker) nem do
       // cadastro manual -- fica em aberto ate um vendedor assumir ou um
-      // gerente atribuir.
+      // gerente atribuir. (Oportunidades manuais sao a excecao: sempre
+      // nascem com dono, tambem definido explicitamente por quem chama.)
       ownerId: null,
       ownerName: null,
       ownerAssignedAt: null,
@@ -139,6 +158,13 @@ function updateLeadStage(id, stage) {
 // Um vendedor assume, para si mesmo, um lead que ainda nao tem responsavel.
 // Recusa se ja houver dono -- nao importa se e o proprio "usuario" repetindo
 // a chamada ou outro vendedor: o caminho pra reatribuir e o gerente.
+//
+// Desde o ajuste de regra de 15/09/2026: assumir NAO e so atribuir dono --
+// e CONVERTER o registro de lead pra oportunidade. A partir daqui ele sai
+// da caixa de entrada (Leads) e entra na carteira do vendedor (Pipeline).
+// O estagio so e forcado pra "novo" se o que estiver la nao for um estagio
+// valido -- na pratica isso nunca deveria acontecer (upsert sempre grava um
+// estagio valido), mas e a regra pedida pra registro antigo/estranho.
 function assumirLead(id, usuario) {
   const leads = getAllLeads();
   const index = leads.findIndex((lead) => lead.id === id);
@@ -151,6 +177,8 @@ function assumirLead(id, usuario) {
   const historico = Array.isArray(atual.ownershipHistory) ? atual.ownershipHistory : [];
   const atualizado = {
     ...atual,
+    recordType: 'opportunity',
+    stage: ALLOWED_STAGES.includes(atual.stage) ? atual.stage : 'novo',
     ownerId: usuario.id,
     ownerName: usuario.nome,
     ownerAssignedAt: now,
@@ -178,6 +206,16 @@ function assumirLead(id, usuario) {
 // So o gerente chama isso: atribuir (lead sem dono), transferir (lead com
 // dono indo pra outro vendedor) ou remover (volta pra fila sem responsavel).
 // `novoDono` e { id, nome } ou null pra remover. `ator` e o gerente logado.
+// Desde o ajuste de regra de 15/09/2026, esta funcao tambem decide
+// recordType -- nao so ownerId. Invariante que ela garante sempre: uma
+// "opportunity" tem dono; quem nao tem dono e "lead".
+//
+//   - Atribuir (de sem dono pra com dono): vira opportunity. Estagio so e
+//     forcado pra "novo" se o que estiver la nao for valido.
+//   - Transferir (de um vendedor pra outro): continua opportunity, estagio
+//     NAO muda -- a negociacao segue de onde estava.
+//   - Remover (de com dono pra sem dono): a negociacao volta pra fila de
+//     triagem -- vira lead e o estagio reseta pra "novo", sempre.
 function definirResponsavel(id, novoDono, ator) {
   const leads = getAllLeads();
   const index = leads.findIndex((lead) => lead.id === id);
@@ -189,8 +227,19 @@ function definirResponsavel(id, novoDono, ator) {
   const de = { id: atual.ownerId || null, nome: atual.ownerName || null };
   const action = !de.id ? 'assigned' : !novoDono ? 'unassigned' : 'transferred';
 
+  let stage;
+  if (!novoDono) {
+    stage = 'novo';
+  } else if (!de.id) {
+    stage = ALLOWED_STAGES.includes(atual.stage) ? atual.stage : 'novo';
+  } else {
+    stage = atual.stage;
+  }
+
   const atualizado = {
     ...atual,
+    recordType: novoDono ? 'opportunity' : 'lead',
+    stage,
     ownerId: novoDono ? novoDono.id : null,
     ownerName: novoDono ? novoDono.nome : null,
     ownerAssignedAt: novoDono ? now : null,
@@ -213,6 +262,25 @@ function definirResponsavel(id, novoDono, ator) {
   leads[index] = atualizado;
   writeJsonAtomic(LEADS_FILE, leads);
   return { lead: atualizado };
+}
+
+// Digitos apenas, sem o DDI (55) quando presente -- pra "11999999999" e
+// "5511999999999" contarem como o mesmo numero na checagem de duplicidade.
+function normalizarTelefone(raw) {
+  const d = String(raw || '').replace(/\D/g, '');
+  if ((d.length === 12 || d.length === 13) && d.startsWith('55')) {
+    const semDDI = d.slice(2);
+    if (semDDI.length === 10 || semDDI.length === 11) return semDDI;
+  }
+  return d;
+}
+
+// Usado antes de criar uma oportunidade manual: existe lead ou oportunidade
+// com esse telefone? Compara em todos os registros, sem distincao de
+// recordType -- duplicidade e por pessoa, nao por tipo de registro.
+function acharPorTelefoneNormalizado(telefoneNormalizado) {
+  if (!telefoneNormalizado) return null;
+  return getAllLeads().find((l) => normalizarTelefone(l.phone) === telefoneNormalizado) || null;
 }
 
 // Mensagens sincronizadas de cada atendimento, guardadas por gptmakerChatId
@@ -272,4 +340,6 @@ module.exports = {
   podeVerLead,
   assumirLead,
   definirResponsavel,
+  normalizarTelefone,
+  acharPorTelefoneNormalizado,
 };
