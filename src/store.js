@@ -58,6 +58,22 @@ function getLeadById(id) {
   return getAllLeads().find((lead) => lead.id === id) || null;
 }
 
+// Um lead "sem responsavel" e todo aquele com ownerId vazio -- inclusive os
+// leads antigos, gravados antes desta entrega, que nunca tiveram o campo
+// fisicamente no JSON. Nao fazemos migracao nenhuma: !lead.ownerId ja cobre
+// null, undefined e string vazia da mesma forma.
+function semResponsavel(lead) {
+  return !lead.ownerId;
+}
+
+// Quem pode ver o lead: gerente ve tudo; vendedor ve o que e dele e o que
+// ainda nao tem responsavel.
+function podeVerLead(lead, usuario) {
+  if (!usuario) return false;
+  if (usuario.papel === 'gerente') return true;
+  return semResponsavel(lead) || lead.ownerId === usuario.id;
+}
+
 // Cria ou atualiza um lead a partir de um identificador de origem estavel
 // (o id do contato no GPT Maker, ou o telefone se o contato nao tiver id).
 // Em criacoes novas aplica os campos default (estagio "novo" etc.), em
@@ -76,6 +92,14 @@ function upsertLeadBySourceId(sourceId, fields) {
       source: 'gptmaker',
       createdAt: now,
       updatedAt: now,
+      // O responsavel comercial nunca vem do atendente (GPT Maker) nem do
+      // cadastro manual -- fica em aberto ate um vendedor assumir ou um
+      // gerente atribuir.
+      ownerId: null,
+      ownerName: null,
+      ownerAssignedAt: null,
+      ownerAssignedBy: null,
+      ownershipHistory: [],
       ...fields,
     };
     leads.unshift(newLead);
@@ -110,6 +134,85 @@ function updateLeadStage(id, stage) {
   };
   writeJsonAtomic(LEADS_FILE, leads);
   return leads[index];
+}
+
+// Um vendedor assume, para si mesmo, um lead que ainda nao tem responsavel.
+// Recusa se ja houver dono -- nao importa se e o proprio "usuario" repetindo
+// a chamada ou outro vendedor: o caminho pra reatribuir e o gerente.
+function assumirLead(id, usuario) {
+  const leads = getAllLeads();
+  const index = leads.findIndex((lead) => lead.id === id);
+  if (index === -1) return { erro: 'nao-encontrado' };
+
+  const atual = leads[index];
+  if (!semResponsavel(atual)) return { erro: 'ja-tem-responsavel', lead: atual };
+
+  const now = new Date().toISOString();
+  const historico = Array.isArray(atual.ownershipHistory) ? atual.ownershipHistory : [];
+  const atualizado = {
+    ...atual,
+    ownerId: usuario.id,
+    ownerName: usuario.nome,
+    ownerAssignedAt: now,
+    ownerAssignedBy: usuario.id,
+    ownershipHistory: [
+      ...historico,
+      {
+        action: 'assigned',
+        fromUserId: null,
+        fromUserName: null,
+        toUserId: usuario.id,
+        toUserName: usuario.nome,
+        byUserId: usuario.id,
+        byUserName: usuario.nome,
+        at: now,
+      },
+    ],
+    updatedAt: now,
+  };
+  leads[index] = atualizado;
+  writeJsonAtomic(LEADS_FILE, leads);
+  return { lead: atualizado };
+}
+
+// So o gerente chama isso: atribuir (lead sem dono), transferir (lead com
+// dono indo pra outro vendedor) ou remover (volta pra fila sem responsavel).
+// `novoDono` e { id, nome } ou null pra remover. `ator` e o gerente logado.
+function definirResponsavel(id, novoDono, ator) {
+  const leads = getAllLeads();
+  const index = leads.findIndex((lead) => lead.id === id);
+  if (index === -1) return { erro: 'nao-encontrado' };
+
+  const atual = leads[index];
+  const now = new Date().toISOString();
+  const historico = Array.isArray(atual.ownershipHistory) ? atual.ownershipHistory : [];
+  const de = { id: atual.ownerId || null, nome: atual.ownerName || null };
+  const action = !de.id ? 'assigned' : !novoDono ? 'unassigned' : 'transferred';
+
+  const atualizado = {
+    ...atual,
+    ownerId: novoDono ? novoDono.id : null,
+    ownerName: novoDono ? novoDono.nome : null,
+    ownerAssignedAt: novoDono ? now : null,
+    ownerAssignedBy: novoDono ? ator.id : null,
+    ownershipHistory: [
+      ...historico,
+      {
+        action,
+        fromUserId: de.id,
+        fromUserName: de.nome,
+        toUserId: novoDono ? novoDono.id : null,
+        toUserName: novoDono ? novoDono.nome : null,
+        byUserId: ator.id,
+        byUserName: ator.nome,
+        at: now,
+      },
+    ],
+    updatedAt: now,
+  };
+  leads[index] = atualizado;
+  writeJsonAtomic(LEADS_FILE, leads);
+  return { lead: atualizado };
 }
 
 // Mensagens sincronizadas de cada atendimento, guardadas por gptmakerChatId
@@ -165,4 +268,8 @@ module.exports = {
   appendMessage,
   getCoachAnalysis,
   setCoachAnalysis,
+  semResponsavel,
+  podeVerLead,
+  assumirLead,
+  definirResponsavel,
 };
