@@ -7,6 +7,9 @@ const { generateCoachAnalysis } = require('../openaiClient');
 
 const router = express.Router();
 
+// Lista fixa nesta entrega -- virar cadastro configuravel fica pra depois.
+const ORIGENS = ['Webmotors', 'OLX', 'iCarros', 'Indicação', 'Loja', 'Telefone', 'Instagram', 'Outro'];
+
 // Se CRM_API_KEY estiver definida, exige o header x-api-key em todas as
 // rotas deste arquivo. Se estiver vazia/ausente, fica aberto (bom pra
 // testar rapido; recomendado preencher quando o CRM for usado por mais gente).
@@ -39,57 +42,91 @@ router.get('/', (req, res) => {
   res.json(leads);
 });
 
-// POST /api/leads { name, phone, email, channel, vehicleInterest }
-// Usado pelo botao "Novo Lead" do CRM, pra cadastro manual (fora do fluxo
-// automatico do GPT Maker).
+// POST /api/leads { name, phone, email, vehicleInterest, notes, origin, ownerId? }
+// Usado pelo botao "+ Nova oportunidade" do CRM, pra cadastro manual (fora
+// do fluxo automatico do GPT Maker). Desde a Entrega 003, todo cadastro
+// manual por aqui e uma OPORTUNIDADE -- nasce sempre com responsavel e
+// nunca passa pela fila "sem responsavel" (isso substitui o comportamento
+// da Entrega 002, onde um gerente podia criar lead manual sem dono).
 //
-// Regra operacional: se quem cadastra e vendedor, o lead nasce ja atribuido
-// a ele -- nao faz sentido um vendedor digitar o proprio cliente e o lead
-// cair na fila sem dono. Se quem cadastra e gerente, o lead nasce sem
-// responsavel, igual a um lead vindo da Vitoria (o gerente atribui depois).
-// O corpo da requisicao nunca e usado pra decidir o dono -- so o usuario da
-// sessao, do mesmo jeito que em /assumir.
+// Responsavel:
+// - vendedor: e sempre quem esta logado -- ownerId do corpo e ignorado.
+// - gerente: obrigatorio escolher um vendedor ativo pelo ownerId.
+//
+// Duplicidade: telefone e normalizado (DDI opcional) e comparado contra
+// TODOS os leads/oportunidades existentes, antes de criar. Se already
+// existir, devolve 409 com o minimo pro frontend oferecer abrir o registro
+// -- nunca cria duplicado silenciosamente.
 router.post('/', (req, res) => {
-  const { name, phone, email, channel, vehicleInterest, notes, gptmakerChatId } = req.body || {};
-  if (!name) {
-    return res.status(400).json({ error: 'Campo "name" e obrigatorio' });
+  const { name, phone, email, vehicleInterest, notes, origin, ownerId, gptmakerChatId } = req.body || {};
+
+  if (!name) return res.status(400).json({ error: 'Campo "name" e obrigatorio' });
+  if (!phone) return res.status(400).json({ error: 'Campo "phone" e obrigatorio' });
+  if (!origin || !ORIGENS.includes(origin)) {
+    return res.status(400).json({ error: `Campo "origin" e obrigatorio e deve ser um de: ${ORIGENS.join(', ')}` });
   }
+
+  const telefoneNormalizado = store.normalizarTelefone(phone);
+  const existente = store.acharPorTelefoneNormalizado(telefoneNormalizado);
+  if (existente) {
+    return res.status(409).json({
+      error: 'Ja existe um registro com este telefone.',
+      existente: {
+        id: existente.id,
+        name: existente.name,
+        ownerName: existente.ownerName || null,
+        stage: existente.stage,
+        recordType: existente.recordType,
+      },
+    });
+  }
+
+  // Nunca confia no ownerId do corpo pra um vendedor -- so pra gerente, e
+  // ainda assim so depois de validar quem e.
+  let dono;
+  if (req.usuario.papel === 'vendedor') {
+    dono = { id: req.usuario.id, nome: req.usuario.nome };
+  } else {
+    if (!ownerId) return res.status(400).json({ error: 'Escolha um vendedor responsavel' });
+    const alvo = usuarios.acharPorId(ownerId);
+    if (!alvo || alvo.ativo === false || alvo.papel !== 'vendedor') {
+      return res.status(400).json({ error: 'O responsavel precisa ser um vendedor ativo' });
+    }
+    dono = { id: alvo.id, nome: alvo.nome };
+  }
+
+  const agora = new Date().toISOString();
   const sourceId = `manual-${crypto.randomUUID()}`;
-  const campos = {
+  const { lead } = store.upsertLeadBySourceId(sourceId, {
     name,
-    phone: phone || null,
+    phone,
     email: email || null,
-    channel: channel || 'Outro',
+    // Sem campo de canal no formulario novo -- a origem escolhida ja
+    // aparece na mesma coluna que os leads do GPT Maker usam pro canal.
+    channel: origin,
+    origin,
     vehicleInterest: vehicleInterest || null,
     notes: notes || null,
-    // Permite vincular esse lead a uma conversa ja existente no GPT Maker
-    // (contextId), pra quando o contato ja existia antes de virar lead no
-    // CRM e por isso o onFirstInteraction nao disparou de novo pra ele.
     gptmakerChatId: gptmakerChatId || null,
     source: 'manual',
-  };
-
-  if (req.usuario.papel === 'vendedor') {
-    const agora = new Date().toISOString();
-    campos.ownerId = req.usuario.id;
-    campos.ownerName = req.usuario.nome;
-    campos.ownerAssignedAt = agora;
-    campos.ownerAssignedBy = req.usuario.id;
-    campos.ownershipHistory = [
+    recordType: 'opportunity',
+    ownerId: dono.id,
+    ownerName: dono.nome,
+    ownerAssignedAt: agora,
+    ownerAssignedBy: req.usuario.id,
+    ownershipHistory: [
       {
         action: 'assigned',
         fromUserId: null,
         fromUserName: null,
-        toUserId: req.usuario.id,
-        toUserName: req.usuario.nome,
+        toUserId: dono.id,
+        toUserName: dono.nome,
         byUserId: req.usuario.id,
         byUserName: req.usuario.nome,
         at: agora,
       },
-    ];
-  }
-
-  const { lead } = store.upsertLeadBySourceId(sourceId, campos);
+    ],
+  });
   res.status(201).json(lead);
 });
 
