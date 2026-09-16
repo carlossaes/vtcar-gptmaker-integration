@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const store = require('../store');
+const { commercialPatch, normalizeOpportunity } = require('../opportunity');
 const usuarios = require('../auth/usuarios');
 const { exigirGerente } = require('../auth/middleware');
 const { generateCoachAnalysis } = require('../openaiClient');
@@ -62,6 +63,10 @@ router.post('/', (req, res) => {
 
   if (!name) return res.status(400).json({ error: 'Campo "name" e obrigatorio' });
   if (!phone) return res.status(400).json({ error: 'Campo "phone" e obrigatorio' });
+  if (typeof vehicleInterest !== 'string' || !vehicleInterest.trim()) return res.status(400).json({ error: 'Veículo de interesse é obrigatório' });
+  let commercial;
+  try { commercial = commercialPatch(req.body); }
+  catch (err) { return res.status(400).json({ error: err.message }); }
   if (!origin || !ORIGENS.includes(origin)) {
     return res.status(400).json({ error: `Campo "origin" e obrigatorio e deve ser um de: ${ORIGENS.join(', ')}` });
   }
@@ -109,6 +114,7 @@ router.post('/', (req, res) => {
     notes: notes || null,
     gptmakerChatId: gptmakerChatId || null,
     source: 'manual',
+    ...commercial,
     recordType: 'opportunity',
     ownerId: dono.id,
     ownerName: dono.nome,
@@ -127,7 +133,18 @@ router.post('/', (req, res) => {
       },
     ],
   });
-  res.status(201).json(lead);
+  res.status(201).json(normalizeOpportunity(lead));
+});
+
+router.patch('/:id/comercial', (req, res) => {
+  const lead = acharLeadVisivel(req, res);
+  if (!lead) return;
+  if (req.usuario.papel !== 'gerente' && !(req.usuario.papel === 'vendedor' && lead.ownerId === req.usuario.id)) {
+    return res.status(403).json({ error: 'Somente o responsável ou gerente pode editar' });
+  }
+  if (lead.recordType !== 'opportunity') return res.status(400).json({ error: 'Registro não é uma oportunidade' });
+  try { res.json(store.updateOpportunity(lead.id, req.body)); }
+  catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 // PATCH /api/leads/:id { "stage": "qualificado" }
