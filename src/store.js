@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { normalizeOpportunity, commercialPatch } = require('./opportunity');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const LEADS_FILE = path.join(DATA_DIR, 'leads.json');
@@ -62,10 +63,22 @@ const ALLOWED_STAGES = ['novo', 'qualificado', 'proposta', 'negociacao', 'fechad
 // Normalizado aqui, num unico lugar, pra todo mundo que ler
 // getAllLeads()/getLeadById() ja receber o campo preenchido.
 function getAllLeads() {
-  return readJson(LEADS_FILE, []).map((l) => ({
+  return readJson(LEADS_FILE, []).map((l) => normalizeOpportunity({
     ...l,
     recordType: l.recordType || (l.ownerId ? 'opportunity' : 'lead'),
   }));
+}
+
+function updateOpportunity(id, fields) {
+  // Read raw records so editing one opportunity does not migrate other records.
+  const leads = readJson(LEADS_FILE, []);
+  const index = leads.findIndex((lead) => lead.id === id);
+  if (index === -1) return null;
+  const current = getLeadById(id);
+  if (current.recordType !== 'opportunity') throw new Error('Registro não é uma oportunidade');
+  leads[index] = { ...leads[index], ...commercialPatch(fields, current), updatedAt: new Date().toISOString() };
+  writeJsonAtomic(LEADS_FILE, leads);
+  return getLeadById(id);
 }
 
 function getLeadById(id) {
@@ -94,7 +107,7 @@ function podeVerLead(lead, usuario) {
 // atualizacoes so faz merge dos campos novos sem sobrescrever o estagio
 // que o vendedor ja tiver movido manualmente no CRM.
 function upsertLeadBySourceId(sourceId, fields) {
-  const leads = getAllLeads();
+  const leads = readJson(LEADS_FILE, []);
   const now = new Date().toISOString();
   const existingIndex = leads.findIndex((lead) => lead.sourceId === sourceId);
 
@@ -123,26 +136,36 @@ function upsertLeadBySourceId(sourceId, fields) {
     };
     leads.unshift(newLead);
     writeJsonAtomic(LEADS_FILE, leads);
-    return { lead: newLead, created: true };
+    return { lead: getLeadById(newLead.id), created: true };
   }
 
   const current = leads[existingIndex];
+  // O CRM controla identidade, carteira e pipeline. O upsert de entrada não
+  // pode apagar esses campos nem atribuí-los em registros legados sem campo.
+  const crmFields = new Set(['id', 'sourceId', 'ownerId', 'ownerName',
+    'ownerAssignedAt', 'ownerAssignedBy', 'ownershipHistory', 'recordType', 'stage']);
+  // Ausência no GPT Maker não é pedido de limpeza. false e 0 são úteis.
+  // Texto útil substitui o anterior; limpeza explícita continua na API comercial.
+  const incoming = Object.fromEntries(Object.entries(fields).filter(([key, value]) =>
+    !crmFields.has(key) && value !== null && value !== undefined &&
+    !(typeof value === 'string' && value.trim() === '')
+  ));
   const updated = {
     ...current,
-    ...fields,
+    ...incoming,
     stage: current.stage, // preserva o estagio do funil ja definido no CRM
     updatedAt: now,
   };
   leads[existingIndex] = updated;
   writeJsonAtomic(LEADS_FILE, leads);
-  return { lead: updated, created: false };
+  return { lead: getLeadById(updated.id), created: false };
 }
 
 function updateLeadStage(id, stage) {
   if (!ALLOWED_STAGES.includes(stage)) {
     throw new Error(`Estagio invalido: ${stage}`);
   }
-  const leads = getAllLeads();
+  const leads = readJson(LEADS_FILE, []);
   const index = leads.findIndex((lead) => lead.id === id);
   if (index === -1) return null;
 
@@ -152,7 +175,7 @@ function updateLeadStage(id, stage) {
     updatedAt: new Date().toISOString(),
   };
   writeJsonAtomic(LEADS_FILE, leads);
-  return leads[index];
+  return getLeadById(id);
 }
 
 // Um vendedor assume, para si mesmo, um lead que ainda nao tem responsavel.
@@ -166,7 +189,7 @@ function updateLeadStage(id, stage) {
 // valido -- na pratica isso nunca deveria acontecer (upsert sempre grava um
 // estagio valido), mas e a regra pedida pra registro antigo/estranho.
 function assumirLead(id, usuario) {
-  const leads = getAllLeads();
+  const leads = readJson(LEADS_FILE, []);
   const index = leads.findIndex((lead) => lead.id === id);
   if (index === -1) return { erro: 'nao-encontrado' };
 
@@ -200,7 +223,7 @@ function assumirLead(id, usuario) {
   };
   leads[index] = atualizado;
   writeJsonAtomic(LEADS_FILE, leads);
-  return { lead: atualizado };
+  return { lead: getLeadById(id) };
 }
 
 // So o gerente chama isso: atribuir (lead sem dono), transferir (lead com
@@ -217,7 +240,7 @@ function assumirLead(id, usuario) {
 //   - Remover (de com dono pra sem dono): a negociacao volta pra fila de
 //     triagem -- vira lead e o estagio reseta pra "novo", sempre.
 function definirResponsavel(id, novoDono, ator) {
-  const leads = getAllLeads();
+  const leads = readJson(LEADS_FILE, []);
   const index = leads.findIndex((lead) => lead.id === id);
   if (index === -1) return { erro: 'nao-encontrado' };
 
@@ -261,7 +284,7 @@ function definirResponsavel(id, novoDono, ator) {
   };
   leads[index] = atualizado;
   writeJsonAtomic(LEADS_FILE, leads);
-  return { lead: atualizado };
+  return { lead: getLeadById(id) };
 }
 
 // Digitos apenas, sem o DDI (55) quando presente -- pra "11999999999" e
@@ -325,6 +348,7 @@ function getLastWebhookDebug() {
 }
 
 module.exports = {
+  updateOpportunity,
   ALLOWED_STAGES,
   getAllLeads,
   getLeadById,
