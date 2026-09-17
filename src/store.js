@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { normalizeOpportunity, commercialPatch } = require('./opportunity');
+const { leadDataPatch } = require('./leadData');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const LEADS_FILE = path.join(DATA_DIR, 'leads.json');
@@ -66,6 +67,7 @@ function getAllLeads() {
   return readJson(LEADS_FILE, []).map((l) => normalizeOpportunity({
     ...l,
     recordType: l.recordType || (l.ownerId ? 'opportunity' : 'lead'),
+    contactNotes: l.contactNotes ?? '',
   }));
 }
 
@@ -76,13 +78,39 @@ function updateOpportunity(id, fields) {
   if (index === -1) return null;
   const current = getLeadById(id);
   if (current.recordType !== 'opportunity') throw new Error('Registro não é uma oportunidade');
-  leads[index] = { ...leads[index], ...commercialPatch(fields, current), updatedAt: new Date().toISOString() };
+  const patch = commercialPatch(fields, current);
+  // Interesse inicial é cadastral após a conversão (Entrega 005).
+  delete patch.vehicleInterest;
+  leads[index] = { ...leads[index], ...patch, updatedAt: new Date().toISOString() };
   writeJsonAtomic(LEADS_FILE, leads);
   return getLeadById(id);
 }
 
 function getLeadById(id) {
   return getAllLeads().find((lead) => lead.id === id) || null;
+}
+
+function updateLeadData(id, fields) {
+  const leads = readJson(LEADS_FILE, []);
+  const index = leads.findIndex((lead) => lead.id === id);
+  if (index === -1) return null;
+  const current = leads[index];
+  if ((current.recordType || (current.ownerId ? 'opportunity' : 'lead')) !== 'lead') {
+    const err = new Error('Oportunidade não permite edição cadastral');
+    err.status = 409; throw err;
+  }
+  const patch = leadDataPatch(fields);
+  if (Object.hasOwn(patch, 'phone')) {
+    patch.phone = normalizarTelefone(patch.phone);
+    if (!patch.phone) throw new Error('Telefone inválido');
+    if (leads.some((lead) => lead.id !== id && normalizarTelefone(lead.phone) === patch.phone)) {
+      const err = new Error('Já existe um registro com este telefone.');
+      err.status = 409; throw err;
+    }
+  }
+  leads[index] = { ...current, ...patch, updatedAt: new Date().toISOString() };
+  writeJsonAtomic(LEADS_FILE, leads);
+  return getLeadById(id);
 }
 
 // Um lead "sem responsavel" e todo aquele com ownerId vazio -- inclusive os
@@ -144,10 +172,13 @@ function upsertLeadBySourceId(sourceId, fields) {
   // pode apagar esses campos nem atribuí-los em registros legados sem campo.
   const crmFields = new Set(['id', 'sourceId', 'ownerId', 'ownerName',
     'ownerAssignedAt', 'ownerAssignedBy', 'ownershipHistory', 'recordType', 'stage']);
+  const isOpportunity = (current.recordType || (current.ownerId ? 'opportunity' : 'lead')) === 'opportunity';
+  // Após conversão, somente vínculo de conversa e origem podem vir da integração.
+  const conversationFields = new Set(['channel', 'origin', 'gptmakerContactId', 'gptmakerChatId']);
   // Ausência no GPT Maker não é pedido de limpeza. false e 0 são úteis.
   // Texto útil substitui o anterior; limpeza explícita continua na API comercial.
   const incoming = Object.fromEntries(Object.entries(fields).filter(([key, value]) =>
-    !crmFields.has(key) && value !== null && value !== undefined &&
+    !crmFields.has(key) && (!isOpportunity || conversationFields.has(key)) && value !== null && value !== undefined &&
     !(typeof value === 'string' && value.trim() === '')
   ));
   const updated = {
@@ -348,6 +379,7 @@ function getLastWebhookDebug() {
 }
 
 module.exports = {
+  updateLeadData,
   updateOpportunity,
   ALLOWED_STAGES,
   getAllLeads,
