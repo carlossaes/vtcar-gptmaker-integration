@@ -25,8 +25,9 @@ function commercialPatch(body, current = {}) {
     if (!Object.hasOwn(body, field) || (field === 'tradeInValue' && !hasTradeIn)) continue;
     const value = body[field];
     if (value === null || value === '') { patch[field] = null; continue; }
-    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error(`${field} deve ser um número não negativo`);
-    if (field === 'installmentsCount' && (!Number.isSafeInteger(value) || value < 1)) throw new Error('installmentsCount deve ser um inteiro maior ou igual a 1');
+    const message = field === 'installmentsCount' ? 'A quantidade de parcelas deve ser um número inteiro maior que zero.' : 'Informe um valor válido.';
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error(message);
+    if (field === 'installmentsCount' && (!Number.isSafeInteger(value) || value < 1)) throw new Error(message);
     patch[field] = value;
   }
   for (const field of TEXT_FIELDS) {
