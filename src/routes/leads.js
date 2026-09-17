@@ -2,6 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const store = require('../store');
 const { commercialPatch, normalizeOpportunity } = require('../opportunity');
+const { leadDataPatch } = require('../leadData');
 const usuarios = require('../auth/usuarios');
 const { exigirGerente } = require('../auth/middleware');
 const { generateCoachAnalysis } = require('../openaiClient');
@@ -61,14 +62,17 @@ router.get('/', (req, res) => {
 router.post('/', (req, res) => {
   const { name, phone, email, vehicleInterest, notes, origin, ownerId, gptmakerChatId } = req.body || {};
 
-  if (!name) return res.status(400).json({ error: 'Campo "name" e obrigatorio' });
-  if (!phone) return res.status(400).json({ error: 'Campo "phone" e obrigatorio' });
-  if (typeof vehicleInterest !== 'string' || !vehicleInterest.trim()) return res.status(400).json({ error: 'Veículo de interesse é obrigatório' });
-  let commercial;
-  try { commercial = commercialPatch(req.body); }
+  if (!name) return res.status(400).json({ error: 'Informe o nome do cliente.' });
+  if (!phone) return res.status(400).json({ error: 'Informe um telefone válido.' });
+  if (typeof vehicleInterest !== 'string' || !vehicleInterest.trim()) return res.status(400).json({ error: 'Informe o veículo de interesse.' });
+  let commercial, contact;
+  try {
+    contact = leadDataPatch({ name, phone, email: email ?? null });
+    commercial = commercialPatch(req.body);
+  }
   catch (err) { return res.status(400).json({ error: err.message }); }
   if (!origin || !ORIGENS.includes(origin)) {
-    return res.status(400).json({ error: `Campo "origin" e obrigatorio e deve ser um de: ${ORIGENS.join(', ')}` });
+    return res.status(400).json({ error: 'Selecione uma origem válida.' });
   }
 
   const telefoneNormalizado = store.normalizarTelefone(phone);
@@ -103,9 +107,9 @@ router.post('/', (req, res) => {
   const agora = new Date().toISOString();
   const sourceId = `manual-${crypto.randomUUID()}`;
   const { lead } = store.upsertLeadBySourceId(sourceId, {
-    name,
-    phone,
-    email: email || null,
+    name: contact.name,
+    phone: telefoneNormalizado,
+    email: contact.email,
     // Sem campo de canal no formulario novo -- a origem escolhida ja
     // aparece na mesma coluna que os leads do GPT Maker usam pro canal.
     channel: origin,
