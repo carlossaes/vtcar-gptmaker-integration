@@ -99,7 +99,7 @@ function updateLeadData(id, fields) {
     const err = new Error('Oportunidade não permite edição cadastral');
     err.status = 409; throw err;
   }
-  const patch = leadDataPatch(fields);
+  const patch = leadDataPatch(fields, current);
   if (Object.hasOwn(patch, 'phone')) {
     patch.phone = normalizarTelefone(patch.phone);
     if (!patch.phone) throw new Error('Telefone inválido');
