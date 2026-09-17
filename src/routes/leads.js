@@ -147,6 +147,17 @@ router.patch('/:id/comercial', (req, res) => {
   catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+router.patch('/:id/lead-data', (req, res) => {
+  const lead = acharLeadVisivel(req, res);
+  if (!lead) return;
+  if (lead.recordType !== 'lead') return res.status(409).json({ error: 'Oportunidade não permite edição cadastral' });
+  if (req.usuario.papel !== 'gerente' && !(req.usuario.papel === 'vendedor' && store.semResponsavel(lead))) {
+    return res.status(403).json({ error: 'Somente gerente ou vendedor em lead livre pode editar' });
+  }
+  try { res.json(store.updateLeadData(lead.id, req.body)); }
+  catch (err) { res.status(err.status || 400).json({ error: err.message }); }
+});
+
 // PATCH /api/leads/:id { "stage": "qualificado" }
 router.patch('/:id', (req, res) => {
   const lead = acharLeadVisivel(req, res);
