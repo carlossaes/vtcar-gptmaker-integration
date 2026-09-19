@@ -12,6 +12,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { normalizeOpportunity, commercialPatch } = require('./opportunity');
 const { leadDataPatch } = require('./leadData');
+const { FOLLOW_UP_FIELDS, normalizeFollowUp, followUpPatch, lossPatch } = require('./followUp');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const LEADS_FILE = path.join(DATA_DIR, 'leads.json');
@@ -64,11 +65,21 @@ const ALLOWED_STAGES = ['novo', 'qualificado', 'proposta', 'negociacao', 'fechad
 // Normalizado aqui, num unico lugar, pra todo mundo que ler
 // getAllLeads()/getLeadById() ja receber o campo preenchido.
 function getAllLeads() {
-  return readJson(LEADS_FILE, []).map((l) => normalizeOpportunity({
+  return readJson(LEADS_FILE, []).map((l) => normalizeFollowUp(normalizeOpportunity({
     ...l,
     recordType: l.recordType || (l.ownerId ? 'opportunity' : 'lead'),
     contactNotes: l.contactNotes ?? '',
-  }));
+  })));
+}
+
+function updateFollowUp(id, fields) {
+  const leads = readJson(LEADS_FILE, []);
+  const index = leads.findIndex((lead) => lead.id === id);
+  if (index === -1) return null;
+  if (getLeadById(id).recordType !== 'opportunity') throw new Error('Registro não é uma oportunidade.');
+  leads[index] = { ...leads[index], ...followUpPatch(fields), updatedAt: new Date().toISOString() };
+  writeJsonAtomic(LEADS_FILE, leads);
+  return getLeadById(id);
 }
 
 function updateOpportunity(id, fields) {
@@ -135,6 +146,8 @@ function podeVerLead(lead, usuario) {
 // atualizacoes so faz merge dos campos novos sem sobrescrever o estagio
 // que o vendedor ja tiver movido manualmente no CRM.
 function upsertLeadBySourceId(sourceId, fields) {
+  // These fields belong exclusively to CRM commands, including on initial import.
+  fields = Object.fromEntries(Object.entries(fields).filter(([key]) => !FOLLOW_UP_FIELDS.includes(key)));
   const leads = readJson(LEADS_FILE, []);
   const now = new Date().toISOString();
   const existingIndex = leads.findIndex((lead) => lead.sourceId === sourceId);
@@ -192,7 +205,7 @@ function upsertLeadBySourceId(sourceId, fields) {
   return { lead: getLeadById(updated.id), created: false };
 }
 
-function updateLeadStage(id, stage) {
+function updateLeadStage(id, stage, lostReason) {
   if (!ALLOWED_STAGES.includes(stage)) {
     throw new Error(`Estagio invalido: ${stage}`);
   }
@@ -202,6 +215,7 @@ function updateLeadStage(id, stage) {
 
   leads[index] = {
     ...leads[index],
+    ...lossPatch(leads[index], stage, lostReason),
     stage,
     updatedAt: new Date().toISOString(),
   };
@@ -236,6 +250,7 @@ function assumirLead(id, usuario) {
     ownerId: usuario.id,
     ownerName: usuario.nome,
     ownerAssignedAt: now,
+    firstHumanActionAt: atual.firstHumanActionAt || now,
     ownerAssignedBy: usuario.id,
     ownershipHistory: [
       ...historico,
@@ -292,6 +307,9 @@ function definirResponsavel(id, novoDono, ator) {
 
   const atualizado = {
     ...atual,
+    // A transfer of a legacy opportunity must not invent an initial response.
+    ...(!de.id && novoDono && !atual.firstHumanActionAt ? { firstHumanActionAt: now } : {}),
+    ...(atual.stage === 'perdido' && stage !== 'perdido' ? { lostReason: '', lostAt: null } : {}),
     recordType: novoDono ? 'opportunity' : 'lead',
     stage,
     ownerId: novoDono ? novoDono.id : null,
@@ -379,6 +397,7 @@ function getLastWebhookDebug() {
 }
 
 module.exports = {
+  updateFollowUp,
   updateLeadData,
   updateOpportunity,
   ALLOWED_STAGES,
