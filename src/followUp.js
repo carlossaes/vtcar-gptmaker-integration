@@ -1,8 +1,16 @@
 const LOST_REASONS = ['preco', 'financiamento_nao_aprovado', 'sem_entrada', 'desistiu', 'comprou_concorrente', 'veiculo_indisponivel', 'troca_nao_aprovada', 'sem_retorno', 'contato_invalido', 'outro'];
-const FOLLOW_UP_FIELDS = ['nextAction', 'nextFollowUpAt', 'firstHumanActionAt', 'lostReason', 'lostAt'];
+const TASK_TYPES = ['ligacao', 'whatsapp', 'visita', 'proposta', 'follow_up', 'outro'];
+const TASK_PRIORITIES = ['baixa', 'media', 'alta', 'urgente'];
+const FOLLOW_UP_FIELDS = ['nextAction', 'nextFollowUpAt', 'firstHumanActionAt', 'lostReason', 'lostAt',
+  'taskType', 'taskPriority', 'taskStatus', 'taskCompletedAt'];
 
 function normalizeFollowUp(lead) {
-  return { ...lead, nextAction: lead.nextAction ?? '', nextFollowUpAt: lead.nextFollowUpAt ?? null,
+  return { ...lead,
+    ...(lead.recordType === 'opportunity' ? {
+      taskType: lead.taskType || 'follow_up', taskPriority: lead.taskPriority || 'media',
+      taskStatus: lead.taskStatus || 'pendente', taskCompletedAt: lead.taskCompletedAt ?? null,
+    } : {}),
+    nextAction: lead.nextAction ?? '', nextFollowUpAt: lead.nextFollowUpAt ?? null,
     firstHumanActionAt: lead.firstHumanActionAt ?? null, lostReason: lead.lostReason ?? '', lostAt: lead.lostAt ?? null };
 }
 
@@ -27,6 +35,16 @@ function followUpPatch(body) {
   if (Object.hasOwn(body, 'nextFollowUpAt')) {
     if (body.nextFollowUpAt !== null && !validISO(body.nextFollowUpAt)) throw new Error('Informe uma data/hora válida com fuso horário para o follow-up.');
     patch.nextFollowUpAt = body.nextFollowUpAt === null ? null : new Date(body.nextFollowUpAt).toISOString();
+  }
+  for (const [field, values, label] of [['taskType', TASK_TYPES, 'Tipo'], ['taskPriority', TASK_PRIORITIES, 'Prioridade']]) {
+    if (!Object.hasOwn(body, field)) continue;
+    if (!values.includes(body[field])) throw new Error(`${label} de tarefa inválido.`);
+    patch[field] = body[field];
+  }
+  // Only editing an allowed field reopens a task; injected control fields do not.
+  if (Object.keys(patch).length) {
+    patch.taskStatus = 'pendente';
+    patch.taskCompletedAt = null;
   }
   return patch;
 }

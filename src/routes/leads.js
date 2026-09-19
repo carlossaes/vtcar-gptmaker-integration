@@ -165,6 +165,17 @@ router.patch('/:id/follow-up', (req, res) => {
   catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+router.patch('/:id/task/complete', (req, res) => {
+  const lead = acharLeadVisivel(req, res);
+  if (!lead) return;
+  if (req.usuario.papel !== 'gerente' && !(req.usuario.papel === 'vendedor' && lead.ownerId === req.usuario.id)) {
+    return res.status(403).json({ error: 'Somente o responsável ou gerente pode concluir a tarefa.' });
+  }
+  if (lead.recordType !== 'opportunity') return res.status(400).json({ error: 'Registro não é uma oportunidade.' });
+  try { res.json(store.completeTask(lead.id)); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 router.patch('/:id/lead-data', (req, res) => {
   const lead = acharLeadVisivel(req, res);
   if (!lead) return;

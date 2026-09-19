@@ -12,7 +12,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { normalizeOpportunity, commercialPatch } = require('./opportunity');
 const { leadDataPatch } = require('./leadData');
-const { FOLLOW_UP_FIELDS, normalizeFollowUp, followUpPatch, lossPatch } = require('./followUp');
+const { FOLLOW_UP_FIELDS, normalizeFollowUp, followUpPatch, lossPatch, validISO } = require('./followUp');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const LEADS_FILE = path.join(DATA_DIR, 'leads.json');
@@ -78,6 +78,23 @@ function updateFollowUp(id, fields) {
   if (index === -1) return null;
   if (getLeadById(id).recordType !== 'opportunity') throw new Error('Registro não é uma oportunidade.');
   leads[index] = { ...leads[index], ...followUpPatch(fields), updatedAt: new Date().toISOString() };
+  writeJsonAtomic(LEADS_FILE, leads);
+  return getLeadById(id);
+}
+
+function completeTask(id) {
+  const leads = readJson(LEADS_FILE, []);
+  const index = leads.findIndex((lead) => lead.id === id);
+  if (index === -1) return null;
+  const current = getLeadById(id);
+  if (current.recordType !== 'opportunity') throw new Error('Registro não é uma oportunidade.');
+  if (!current.nextAction?.trim() || !validISO(current.nextFollowUpAt)) {
+    throw new Error('Defina a próxima ação e uma data válida antes de concluir a tarefa.');
+  }
+  // A retried completion must not replace the original completion time.
+  if (current.taskStatus === 'concluida') return current;
+  const now = new Date().toISOString();
+  leads[index] = { ...leads[index], taskStatus: 'concluida', taskCompletedAt: now, updatedAt: now };
   writeJsonAtomic(LEADS_FILE, leads);
   return getLeadById(id);
 }
@@ -397,6 +414,7 @@ function getLastWebhookDebug() {
 }
 
 module.exports = {
+  completeTask,
   updateFollowUp,
   updateLeadData,
   updateOpportunity,
