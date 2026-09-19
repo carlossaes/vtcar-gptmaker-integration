@@ -151,6 +151,17 @@ router.patch('/:id/comercial', (req, res) => {
   catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+router.patch('/:id/follow-up', (req, res) => {
+  const lead = acharLeadVisivel(req, res);
+  if (!lead) return;
+  if (req.usuario.papel !== 'gerente' && !(req.usuario.papel === 'vendedor' && lead.ownerId === req.usuario.id)) {
+    return res.status(403).json({ error: 'Somente o responsável ou gerente pode editar o follow-up.' });
+  }
+  if (lead.recordType !== 'opportunity') return res.status(400).json({ error: 'Registro não é uma oportunidade.' });
+  try { res.json(store.updateFollowUp(lead.id, req.body)); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 router.patch('/:id/lead-data', (req, res) => {
   const lead = acharLeadVisivel(req, res);
   if (!lead) return;
@@ -172,7 +183,7 @@ router.patch('/:id', (req, res) => {
     return res.status(400).json({ error: 'Campo "stage" e obrigatorio' });
   }
   try {
-    const updated = store.updateLeadStage(lead.id, stage);
+    const updated = store.updateLeadStage(lead.id, stage, req.body.lostReason);
     res.json(updated);
   } catch (err) {
     res.status(400).json({ error: err.message });
