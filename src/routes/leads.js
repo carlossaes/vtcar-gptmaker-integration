@@ -53,7 +53,7 @@ router.get('/', (req, res) => {
 //
 // Responsavel:
 // - vendedor: e sempre quem esta logado -- ownerId do corpo e ignorado.
-// - gerente: obrigatorio escolher um vendedor ativo pelo ownerId.
+// - gerente/administrador: escolhe um vendedor ativo ou a si mesmo pelo ownerId.
 //
 // Duplicidade: telefone e normalizado (DDI opcional) e comparado contra
 // TODOS os leads/oportunidades existentes, antes de criar. Se already
@@ -95,13 +95,16 @@ router.post('/', (req, res) => {
   let dono;
   if (req.usuario.papel === 'vendedor') {
     dono = { id: req.usuario.id, nome: req.usuario.nome };
-  } else {
-    if (!ownerId) return res.status(400).json({ error: 'Escolha um vendedor responsavel' });
+  } else if (req.usuario.papel === 'gerente') {
+    if (!ownerId) return res.status(400).json({ error: 'Escolha um responsável' });
     const alvo = usuarios.acharPorId(ownerId);
-    if (!alvo || alvo.ativo === false || alvo.papel !== 'vendedor') {
-      return res.status(400).json({ error: 'O responsavel precisa ser um vendedor ativo' });
+    const proprioGerente = alvo?.id === req.usuario.id && alvo?.papel === 'gerente';
+    if (!alvo || alvo.ativo === false || (alvo.papel !== 'vendedor' && !proprioGerente)) {
+      return res.status(400).json({ error: 'Escolha um vendedor ativo ou você mesmo como responsável' });
     }
     dono = { id: alvo.id, nome: alvo.nome };
+  } else {
+    return res.status(403).json({ error: 'Sem permissão para criar oportunidade' });
   }
 
   const agora = new Date().toISOString();
