@@ -9,6 +9,7 @@ const debugRouter = require('./src/routes/debug');
 const gptmakerRouter = require('./src/routes/gptmaker');
 const authRouter = require('./src/routes/auth');
 const usuariosRouter = require('./src/routes/usuarios');
+const { defaultFinancingRouter } = require('./src/routes/financiamento');
 const { exigirAuth } = require('./src/auth/middleware');
 
 const app = express();
@@ -31,6 +32,7 @@ app.use('/api/usuarios', usuariosRouter);
 app.use('/api/leads', exigirAuth, leadsRouter);
 app.use('/api/debug', exigirAuth, debugRouter);
 app.use('/api/gptmaker', exigirAuth, gptmakerRouter);
+app.use('/api/financiamento', exigirAuth, defaultFinancingRouter());
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Rota nao encontrada' });
