@@ -36,7 +36,7 @@ const users = [
   { id: 'g', nome: 'Gerente', papel: 'gerente', ativo: true },
 ];
 const leads = [
-  { id: 'opp1', sourceId: 'opp1', name: 'Cliente Teste Financiamento', stage: 'negociacao', ownerId: 'v1', recordType: 'opportunity', createdAt: '2026-10-01T10:00:00Z' },
+  { id: 'opp1', sourceId: 'opp1', name: 'Cliente Teste Financiamento', stage: 'negociacao', ownerId: 'v1', recordType: 'opportunity', vehicleInterest: 'POP 100', createdAt: '2026-10-01T10:00:00Z' },
   { id: 'opp2', sourceId: 'opp2', name: 'Outro Cliente', stage: 'novo', ownerId: 'v2', recordType: 'opportunity', createdAt: '2026-10-01T10:00:00Z' },
   { id: 'free', sourceId: 'free', name: 'Lead Livre', stage: 'novo', createdAt: '2026-10-01T10:00:00Z' },
 ];
@@ -205,6 +205,20 @@ test('POST 202: intenção persistida ANTES do POST, mesma chave no header, CPF 
   const rec = JSON.parse(arquivo).find((x) => x.id === r.body.id);
   assert.equal(rec.zinixSimulationId, SIM); assert.equal(rec.requestId, 'req-post'); assert.equal(rec.userId, 'v1'); assert.equal(rec.opportunityId, 'opp1');
   assert.deepEqual(rec.billingCharge, { debited: true, units: 1, reason: 'new_cpf_this_month', balance_after: 47 });
+});
+
+test('MVP-002: registro guarda o veículo de interesse da oportunidade (referência), nunca dados pessoais do cliente', async () => {
+  const r = await api('POST', '/simulacoes', form());
+  assert.equal(r.status, 202);
+  assert.equal(r.body.vehicleInterest, 'POP 100');
+  const rec = JSON.parse(fs.readFileSync(zinixFile(), 'utf8')).find((x) => x.id === r.body.id);
+  assert.equal(rec.vehicleInterest, 'POP 100');
+  assert.equal(rec.applicant, undefined);
+  const arquivo = fs.readFileSync(zinixFile(), 'utf8');
+  for (const dado of [...PII, 'Londrina']) assert.ok(!arquivo.includes(dado), `arquivo não guarda ${dado}`);
+  assert.ok(!posts()[0].body.vehicleInterest, 'referência comercial não vai para a Zinix');
+  const lista = await api('GET', '/oportunidades/opp1/simulacoes');
+  assert.equal(lista.body.find((x) => x.id === r.body.id).vehicleInterest, 'POP 100');
 });
 
 test('nomes do veículo vêm do catálogo; código fora do catálogo não é enviado', async () => {

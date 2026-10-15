@@ -299,6 +299,7 @@ function createFinancingService({ adapter, repository, store, audit = defaultAud
       createdByName: r.userName || null,
       requestId: r.requestId || null,
       vehicle: r.vehicle,
+      vehicleInterest: r.vehicleInterest ?? null,
       terms: r.terms,
       progress: r.progress || null,
       results: (r.results || []).map((b) => ({ ...b, bankName: nomes.get(b.bank) || b.bank })),
@@ -469,6 +470,10 @@ function createFinancingService({ adapter, repository, store, audit = defaultAud
         payloadHash: hmac(salt, canonico),
         status: 'enviando',
         vehicle: { ...payload.vehicle },
+        // Referência comercial da oportunidade no momento da simulação (texto do
+        // veículo de interesse, sem dado pessoal). Permite à tela avisar quando o
+        // veículo de interesse mudou depois e a identificação precisa ser revalidada.
+        vehicleInterest: str(lead.vehicleInterest, 120) || null,
         terms: { ...payload.terms },
         attempts: 0,
         zinixSimulationId: null,
