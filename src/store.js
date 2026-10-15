@@ -107,8 +107,6 @@ function updateOpportunity(id, fields) {
   const current = getLeadById(id);
   if (current.recordType !== 'opportunity') throw new Error('Registro não é uma oportunidade');
   const patch = commercialPatch(fields, current);
-  // Interesse inicial é cadastral após a conversão (Entrega 005).
-  delete patch.vehicleInterest;
   leads[index] = { ...leads[index], ...patch, updatedAt: new Date().toISOString() };
   writeJsonAtomic(LEADS_FILE, leads);
   return getLeadById(id);
