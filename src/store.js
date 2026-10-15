@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { normalizeOpportunity, commercialPatch } = require('./opportunity');
+const { normalizeOpportunity, commercialPatch, publicFinancingFields, FINANCING_FIELDS } = require('./opportunity');
 const { leadDataPatch } = require('./leadData');
 const { FOLLOW_UP_FIELDS, normalizeFollowUp, followUpPatch, lossPatch, validISO } = require('./followUp');
 
@@ -65,11 +65,11 @@ const ALLOWED_STAGES = ['novo', 'qualificado', 'proposta', 'negociacao', 'fechad
 // Normalizado aqui, num unico lugar, pra todo mundo que ler
 // getAllLeads()/getLeadById() ja receber o campo preenchido.
 function getAllLeads() {
-  return readJson(LEADS_FILE, []).map((l) => normalizeFollowUp(normalizeOpportunity({
+  return readJson(LEADS_FILE, []).map((l) => publicFinancingFields(normalizeFollowUp(normalizeOpportunity({
     ...l,
     recordType: l.recordType || (l.ownerId ? 'opportunity' : 'lead'),
     contactNotes: l.contactNotes ?? '',
-  })));
+  }))));
 }
 
 function updateFollowUp(id, fields) {
@@ -110,6 +110,38 @@ function updateOpportunity(id, fields) {
   leads[index] = { ...leads[index], ...patch, updatedAt: new Date().toISOString() };
   writeJsonAtomic(LEADS_FILE, leads);
   return getLeadById(id);
+}
+
+// ZINIX-MVP-002A: grava SOMENTE campos de financiamento (allowlist) numa
+// oportunidade. Lê o registro cru e muda só as chaves pedidas; os demais
+// registros e campos ficam intactos. `undefined` remove a chave.
+// A validação dos valores é do financingService; aqui só a allowlist.
+function updateFinancingData(id, patch) {
+  const chaves = Object.keys(patch || {});
+  if (!chaves.length || chaves.some((k) => !FINANCING_FIELDS.includes(k))) throw new Error('Campo de financiamento não permitido');
+  const leads = readJson(LEADS_FILE, []);
+  const index = leads.findIndex((lead) => lead.id === id);
+  if (index === -1) return null;
+  if (getLeadById(id).recordType !== 'opportunity') throw new Error('Registro não é uma oportunidade');
+  const atualizado = { ...leads[index], updatedAt: new Date().toISOString() };
+  for (const k of chaves) {
+    if (patch[k] === undefined) delete atualizado[k];
+    else atualizado[k] = patch[k];
+  }
+  leads[index] = atualizado;
+  writeJsonAtomic(LEADS_FILE, leads);
+  return getLeadById(id);
+}
+
+// Dados do cliente para a simulação, lidos do registro cru (o CPF inteiro só
+// existe aqui dentro do servidor; a visão pública traz apenas o mascarado).
+function getFinancingCustomer(id) {
+  const raw = readJson(LEADS_FILE, []).find((lead) => lead.id === id);
+  if (!raw) return null;
+  return {
+    document: raw.customerDocument ?? null, birthDate: raw.customerBirthDate ?? null, gender: raw.customerGender ?? null,
+    state: raw.customerState ?? null, city: raw.customerCity ?? null, hasDriverLicense: raw.customerHasDriverLicense ?? null,
+  };
 }
 
 function getLeadById(id) {
@@ -419,6 +451,8 @@ module.exports = {
   ALLOWED_STAGES,
   getAllLeads,
   getLeadById,
+  updateFinancingData,
+  getFinancingCustomer,
   upsertLeadBySourceId,
   updateLeadStage,
   setLastWebhookDebug,

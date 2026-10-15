@@ -44,4 +44,34 @@ function commercialPatch(body, current = {}) {
   return patch;
 }
 
-module.exports = { normalizeOpportunity, commercialPatch };
+// ZINIX-MVP-002A — dados para financiamento, TODOS OPCIONAIS.
+// O registro lead/oportunidade já é a ficha do cliente (1 telefone = 1
+// registro), então os dados do cliente e a estrutura técnica do veículo de
+// interesse ficam nele mesmo. Registros antigos não têm nenhum destes campos
+// e continuam iguais: nada é preenchido por padrão e nada é migrado.
+const CUSTOMER_FIELDS = ['customerDocument', 'customerBirthDate', 'customerGender', 'customerState', 'customerCity', 'customerHasDriverLicense'];
+const VEHICLE_CATALOG_FIELDS = ['vehicleType', 'vehicleBrandCode', 'vehicleBrandName', 'vehicleModelCode', 'vehicleModelName', 'vehicleVersionCode',
+  'vehicleVersionName', 'vehicleManufactureYear', 'vehicleModelYear', 'vehicleZeroKm', 'vehicleCatalogInterest', 'vehicleCatalogConfirmedAt'];
+const FINANCING_FIELDS = [...CUSTOMER_FIELDS, ...VEHICLE_CATALOG_FIELDS];
+
+const textoVeiculo = (v) => (typeof v === 'string' ? v.trim().replace(/\s+/g, ' ') : '');
+
+// Visão pública (API/telas): o CPF nunca sai inteiro do servidor, só mascarado.
+// A revalidação do veículo é derivada: a estrutura foi confirmada para um texto
+// de veículo de interesse; se o texto mudou depois, precisa confirmar de novo.
+// Sem nenhum campo novo, o registro é devolvido exatamente como veio.
+function publicFinancingFields(lead) {
+  if (!lead || (lead.customerDocument == null && lead.vehicleVersionCode == null)) return lead;
+  const result = { ...lead };
+  if (lead.customerDocument != null) {
+    const d = String(lead.customerDocument).replace(/\D/g, '');
+    delete result.customerDocument;
+    result.customerDocumentMasked = d.length === 11 ? `•••.•••.•••-${d.slice(9)}` : '•••';
+  }
+  if (lead.vehicleVersionCode != null) {
+    result.vehicleCatalogNeedsReview = textoVeiculo(lead.vehicleCatalogInterest) !== textoVeiculo(lead.vehicleInterest);
+  }
+  return result;
+}
+
+module.exports = { normalizeOpportunity, commercialPatch, publicFinancingFields, CUSTOMER_FIELDS, VEHICLE_CATALOG_FIELDS, FINANCING_FIELDS };

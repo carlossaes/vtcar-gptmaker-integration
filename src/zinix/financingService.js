@@ -80,6 +80,65 @@ function centavos(valor) {
   return c;
 }
 
+function validarVeiculo(v, agora, erros) {
+  if (!['car', 'motorcycle'].includes(v.type)) erros['vehicle.type'] = 'Selecione o tipo de veículo.';
+  const codigo = (x) => { const s = texto(x); return s.length >= 1 && s.length <= 64 && semControle(s) ? s : null; };
+  const brandCode = codigo(v.brandCode); if (!brandCode) erros['vehicle.brandCode'] = 'Selecione a marca no catálogo.';
+  const modelCode = codigo(v.modelCode); if (!modelCode) erros['vehicle.modelCode'] = 'Selecione o modelo no catálogo.';
+  const versionCode = codigo(v.versionCode); if (!versionCode) erros['vehicle.versionCode'] = 'Selecione a versão no catálogo.';
+  const anoMax = agora.getUTCFullYear() + 2;
+  const fab = v.manufactureYear;
+  const mod = v.modelYear;
+  if (!Number.isSafeInteger(fab) || fab < 1950 || fab > anoMax) erros['vehicle.manufactureYear'] = 'Informe o ano de fabricação.';
+  if (!Number.isSafeInteger(mod) || mod < 1950 || mod > anoMax) erros['vehicle.modelYear'] = 'Informe o ano do modelo.';
+  else if (Number.isSafeInteger(fab) && mod < fab) erros['vehicle.modelYear'] = 'O ano do modelo não pode ser anterior ao de fabricação.';
+  if (typeof v.zeroKm !== 'boolean') erros['vehicle.zeroKm'] = 'Informe se o veículo é zero km.';
+  return { type: v.type, brandCode, modelCode, versionCode, manufactureYear: fab, modelYear: mod, zeroKm: v.zeroKm };
+}
+
+// --- ZINIX-MVP-002A: dados do cliente gravados no CRM ----------------------
+// Allowlist explícita (nome da API -> campo do registro). Qualquer outra chave
+// é recusada. Mensagens nunca repetem o valor recebido (CPF fora de erro/log).
+const CAMPOS_CLIENTE = {
+  document: 'customerDocument', birthDate: 'customerBirthDate', gender: 'customerGender',
+  state: 'customerState', city: 'customerCity', hasDriverLicense: 'customerHasDriverLicense',
+};
+
+function validarCliente(body, agora) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new FinancingError(400, 'Dados do cliente inválidos.', { code: 'dados_invalidos' });
+  const chaves = Object.keys(body);
+  const estranhas = chaves.filter((k) => !Object.hasOwn(CAMPOS_CLIENTE, k));
+  if (estranhas.length) {
+    throw new FinancingError(400, 'Campo não permitido.', { code: 'campo_nao_permitido', fields: Object.fromEntries(estranhas.slice(0, 10).map((k) => [String(k).slice(0, 40), 'Campo não permitido.'])) });
+  }
+  if (!chaves.length) throw new FinancingError(400, 'Nada para salvar.', { code: 'dados_invalidos' });
+  const erros = {}; const patch = {};
+  for (const k of chaves) {
+    const valor = body[k];
+    if (valor === null) { patch[CAMPOS_CLIENTE[k]] = undefined; continue; } // limpar o campo
+    if (k === 'document') {
+      const cpf = texto(valor).replace(/\D/g, '');
+      if (typeof valor !== 'string' || !cpfValido(cpf)) erros.document = 'Informe um CPF válido.'; else patch.customerDocument = cpf;
+    } else if (k === 'birthDate') {
+      const nasc = texto(valor);
+      if (!dataValida(nasc)) erros.birthDate = 'Informe uma data de nascimento válida.';
+      else { const idade = idadeEm(nasc, agora); if (idade < 18 || idade > 100) erros.birthDate = 'O cliente precisa ter entre 18 e 100 anos.'; else patch.customerBirthDate = nasc; }
+    } else if (k === 'gender') {
+      if (!['male', 'female'].includes(valor)) erros.gender = 'Selecione o sexo.'; else patch.customerGender = valor;
+    } else if (k === 'state') {
+      const uf = texto(valor).toUpperCase();
+      if (!UFS.includes(uf)) erros.state = 'Selecione a UF.'; else patch.customerState = uf;
+    } else if (k === 'city') {
+      const cidade = texto(valor).replace(/\s+/g, ' ');
+      if (cidade.length < 2 || cidade.length > 80 || !semControle(cidade) || !/[A-Za-zÀ-ÿ]/.test(cidade)) erros.city = 'Informe a cidade.'; else patch.customerCity = cidade;
+    } else if (k === 'hasDriverLicense') {
+      if (typeof valor !== 'boolean') erros.hasDriverLicense = 'Informe se o cliente possui CNH.'; else patch.customerHasDriverLicense = valor;
+    }
+  }
+  if (Object.keys(erros).length) throw new FinancingError(400, 'Confira os campos destacados.', { code: 'dados_invalidos', fields: erros });
+  return patch;
+}
+
 function validarEntrada(body, agora) {
   const erros = {};
   const b = body && typeof body === 'object' ? body : {};
@@ -108,18 +167,7 @@ function validarEntrada(body, agora) {
   if (cidade.length < 2 || cidade.length > 80 || !semControle(cidade)) erros['applicant.city'] = 'Informe a cidade.';
   if (typeof a.hasDriverLicense !== 'boolean') erros['applicant.hasDriverLicense'] = 'Informe se o cliente possui CNH.';
 
-  if (!['car', 'motorcycle'].includes(v.type)) erros['vehicle.type'] = 'Selecione o tipo de veículo.';
-  const codigo = (x) => { const s = texto(x); return s.length >= 1 && s.length <= 64 && semControle(s) ? s : null; };
-  const brandCode = codigo(v.brandCode); if (!brandCode) erros['vehicle.brandCode'] = 'Selecione a marca no catálogo.';
-  const modelCode = codigo(v.modelCode); if (!modelCode) erros['vehicle.modelCode'] = 'Selecione o modelo no catálogo.';
-  const versionCode = codigo(v.versionCode); if (!versionCode) erros['vehicle.versionCode'] = 'Selecione a versão no catálogo.';
-  const anoMax = agora.getUTCFullYear() + 2;
-  const fab = v.manufactureYear;
-  const mod = v.modelYear;
-  if (!Number.isSafeInteger(fab) || fab < 1950 || fab > anoMax) erros['vehicle.manufactureYear'] = 'Informe o ano de fabricação.';
-  if (!Number.isSafeInteger(mod) || mod < 1950 || mod > anoMax) erros['vehicle.modelYear'] = 'Informe o ano do modelo.';
-  else if (Number.isSafeInteger(fab) && mod < fab) erros['vehicle.modelYear'] = 'O ano do modelo não pode ser anterior ao de fabricação.';
-  if (typeof v.zeroKm !== 'boolean') erros['vehicle.zeroKm'] = 'Informe se o veículo é zero km.';
+  const vehicle = validarVeiculo(v, agora, erros);
 
   const valor = centavos(t.assetValue);
   if (valor === null || valor <= 0 || valor > 1000000000) erros['terms.assetValue'] = 'Informe o valor do veículo.';
@@ -137,7 +185,7 @@ function validarEntrada(body, agora) {
   }
   return {
     applicant: { document: cpf, gender: a.gender, name: nome, birth_date: nasc, email, phone: fone, state: uf, city: cidade, has_driver_license: a.hasDriverLicense },
-    vehicle: { type: v.type, brandCode, modelCode, versionCode, manufactureYear: fab, modelYear: mod, zeroKm: v.zeroKm },
+    vehicle,
     terms: { asset_value_cents: valor, down_payment_cents: entrada, installments: parcelas },
   };
 }
@@ -311,6 +359,31 @@ function createFinancingService({ adapter, repository, store, audit = defaultAud
     };
   }
 
+  // ZINIX-MVP-002A: a simulação usa os dados do CRM no momento do POST. O que
+  // vier no corpo prevalece (compatibilidade com a tela da MVP-002); o que
+  // faltar vem do registro. O veículo, se omitido, vem da estrutura salva na
+  // oportunidade — e nunca de uma estrutura pendente de revalidação.
+  function completarComCrm(body, lead) {
+    const b = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+    const a = b.applicant && typeof b.applicant === 'object' ? b.applicant : {};
+    const crm = store.getFinancingCustomer(lead.id) || {};
+    const ou = (x, y) => (x === undefined || x === null || x === '' ? y : x);
+    const applicant = {
+      name: ou(a.name, lead.name), phone: ou(a.phone, lead.phone), email: ou(a.email, lead.email),
+      document: ou(a.document, crm.document), birthDate: ou(a.birthDate, crm.birthDate), gender: ou(a.gender, crm.gender),
+      state: ou(a.state, crm.state), city: ou(a.city, crm.city), hasDriverLicense: ou(a.hasDriverLicense, crm.hasDriverLicense),
+    };
+    let vehicle = b.vehicle;
+    if (!vehicle && lead.vehicleVersionCode != null) {
+      if (lead.vehicleCatalogNeedsReview) {
+        throw new FinancingError(409, 'O veículo de interesse foi alterado. Confirme novamente os dados do veículo antes de uma nova simulação.', { code: 'veiculo_revalidar' });
+      }
+      vehicle = { type: lead.vehicleType, brandCode: lead.vehicleBrandCode, modelCode: lead.vehicleModelCode, versionCode: lead.vehicleVersionCode,
+        manufactureYear: lead.vehicleManufactureYear, modelYear: lead.vehicleModelYear, zeroKm: lead.vehicleZeroKm };
+    }
+    return { ...b, applicant, vehicle };
+  }
+
   function limitarCriacao(userId) {
     const t = now().getTime();
     const hits = (createHits.get(userId) || []).filter((x) => t - x < CREATE_LIMIT.windowMs);
@@ -430,9 +503,37 @@ function createFinancingService({ adapter, repository, store, audit = defaultAud
       try { return await catalogo('versions', { type, brandCode, modelCode, manufactureYear, modelYear }); } catch (err) { throw traduzir(err); }
     },
 
+    // ZINIX-MVP-002A: grava/edita dados do cliente no próprio registro da oportunidade.
+    async salvarCliente(usuario, opportunityId, body) {
+      const lead = oportunidade(opportunityId, usuario);
+      const patch = validarCliente(body, now());
+      const atualizado = store.updateFinancingData(lead.id, patch);
+      audit('customer.updated', { userId: usuario.id, opportunityId: lead.id });
+      return atualizado;
+    },
+
+    // ZINIX-MVP-002A: estrutura técnica do MESMO veículo da oportunidade.
+    // Códigos e nomes conferidos no catálogo (nada digitado/inventado), e a
+    // confirmação fica amarrada ao texto atual de vehicleInterest.
+    async salvarVeiculo(usuario, opportunityId, body) {
+      const lead = oportunidade(opportunityId, usuario);
+      const erros = {};
+      const v = validarVeiculo(body && typeof body === 'object' && !Array.isArray(body) ? body : {}, now(), erros);
+      if (Object.keys(erros).length) throw new FinancingError(400, 'Confira os campos destacados.', { code: 'dados_invalidos', fields: erros });
+      let c;
+      try { c = await veiculoDoCatalogo(v); } catch (err) { throw traduzir(err); }
+      const atualizado = store.updateFinancingData(lead.id, {
+        vehicleType: c.type, vehicleBrandCode: c.brand_code, vehicleBrandName: c.brand_name, vehicleModelCode: c.model_code, vehicleModelName: c.model_name,
+        vehicleVersionCode: c.version_code, vehicleVersionName: c.version_name, vehicleManufactureYear: c.manufacture_year, vehicleModelYear: c.model_year,
+        vehicleZeroKm: c.zero_km, vehicleCatalogInterest: String(lead.vehicleInterest || '').trim(), vehicleCatalogConfirmedAt: now().toISOString(),
+      });
+      audit('vehicle.confirmed', { userId: usuario.id, opportunityId: lead.id });
+      return atualizado;
+    },
+
     async criarSimulacao(usuario, body) {
       const lead = oportunidade(body && body.opportunityId, usuario);
-      const dados = validarEntrada(body, now());
+      const dados = validarEntrada(completarComCrm(body, lead), now());
       limitarCriacao(usuario.id);
       let payload;
       try {
@@ -533,4 +634,4 @@ function createFinancingService({ adapter, repository, store, audit = defaultAud
   };
 }
 
-module.exports = { createFinancingService, FinancingError, validarEntrada, cpfValido, sanitizeResults, traduzir, MIN_POLL_MS };
+module.exports = { createFinancingService, FinancingError, validarEntrada, validarCliente, cpfValido, sanitizeResults, traduzir, MIN_POLL_MS };

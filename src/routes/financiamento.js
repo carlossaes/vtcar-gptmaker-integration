@@ -46,6 +46,9 @@ function createFinancingRouter(service) {
   router.post('/simulacoes', handle(async (req) => ({ __status: 202, body: await service.criarSimulacao(req.usuario, req.body) })));
   router.get('/simulacoes/:id', handle((req) => service.consultarSimulacao(req.usuario, req.params.id)));
   router.get('/oportunidades/:id/simulacoes', handle((req) => service.listarDaOportunidade(req.usuario, req.params.id)));
+  // ZINIX-MVP-002A: endpoints específicos (allowlist no service), nunca um PATCH genérico.
+  router.patch('/oportunidades/:id/cliente', handle((req) => service.salvarCliente(req.usuario, req.params.id, req.body)));
+  router.put('/oportunidades/:id/veiculo', handle((req) => service.salvarVeiculo(req.usuario, req.params.id, req.body)));
 
   return router;
 }
