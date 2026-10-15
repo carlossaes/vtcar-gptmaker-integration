@@ -4,6 +4,7 @@
 
 const express = require('express');
 const { FinancingError } = require('../zinix/financingService');
+const { protegerDadosPessoais } = require('../publicLead');
 
 const TIPOS = { car: 'car', carro: 'car', motorcycle: 'motorcycle', moto: 'motorcycle' };
 
@@ -12,6 +13,8 @@ function createFinancingRouter(service) {
 
   // Respostas com dado financeiro nunca devem ficar em cache intermediario.
   router.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+  // ZINIX-MVP-002B: visao publica unica (CPF nunca sai inteiro; dados pessoais por perfil).
+  router.use(protegerDadosPessoais);
 
   const handle = (fn) => async (req, res) => {
     try {

@@ -5,6 +5,8 @@ const { isLidPhone } = require('../normalizeLead');
 const { mapChannelTypeToLabel } = require('../gptmakerClient');
 
 const router = express.Router();
+// ZINIX-MVP-002B: respostas sem CPF completo nem dados pessoais indevidos.
+router.use(require('../publicLead').protegerDadosPessoais);
 
 // Mesma protecao das outras rotas do CRM: se CRM_API_KEY estiver definida,
 // exige o header x-api-key. O token do GPT Maker nunca sai daqui — ele fica

@@ -6,8 +6,11 @@ const { leadDataPatch } = require('../leadData');
 const usuarios = require('../auth/usuarios');
 const { exigirGerente } = require('../auth/middleware');
 const { generateCoachAnalysis } = require('../openaiClient');
+const { protegerDadosPessoais } = require('../publicLead');
 
 const router = express.Router();
+// ZINIX-MVP-002B: toda resposta deste router passa pela visão pública (sem CPF completo).
+router.use(protegerDadosPessoais);
 
 // Lista fixa nesta entrega -- virar cadastro configuravel fica pra depois.
 const ORIGENS = ['Webmotors', 'OLX', 'iCarros', 'Indicação', 'Loja', 'Telefone', 'Instagram', 'Outro'];

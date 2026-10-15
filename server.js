@@ -11,11 +11,14 @@ const authRouter = require('./src/routes/auth');
 const usuariosRouter = require('./src/routes/usuarios');
 const { defaultFinancingRouter } = require('./src/routes/financiamento');
 const { exigirAuth } = require('./src/auth/middleware');
+const { protegerDadosPessoais } = require('./src/publicLead');
 
 const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+// ZINIX-MVP-002B: TODA resposta JSON passa pela visão pública (CPF nunca sai inteiro).
+app.use(protegerDadosPessoais);
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'vtcar-gptmaker-integration' });
@@ -39,8 +42,12 @@ app.use((req, res) => {
 });
 
 // eslint-disable-next-line no-unused-vars
+// ZINIX-MVP-002B: nunca logar o objeto de erro inteiro. O erro de JSON
+// malformado do express.json traz o corpo bruto em err.body (pode conter CPF).
 app.use((err, req, res, next) => {
-  console.error('[server] Erro nao tratado:', err);
+  console.error('[server] Erro nao tratado:', (err && (err.type || err.name)) || 'erro');
+  if (err && err.type === 'entity.parse.failed') return res.status(400).json({ error: 'JSON inválido' });
+  if (err && err.type === 'entity.too.large') return res.status(413).json({ error: 'Requisição muito grande' });
   res.status(500).json({ error: 'Erro interno' });
 });
 
